@@ -96,33 +96,11 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
 
     try:
         if options.rollback:
-            stage = "manual_rollback"
-            production_untouched = False
-            perform_manual_rollback(
+            return run_rollback(
                 config,
                 state_store,
-                _derive_related_log_path(log_path, "mcp-production"),
-                docker_runner=default_docker_runner,
-                production_smoke_runner=lambda current_config: run_production_smoke_test(
-                    current_config,
-                    docker_runner=default_docker_runner,
-                ),
-            )
-            logger.info("Manual rollback completed successfully.")
-            return _handle_success_notification_and_cleanup(
-                config,
-                NotificationPayload(
-                    project=config.project,
-                    status="rollback",
-                    stage=stage,
-                    targetCommit=None,
-                    lastIndexedCommit=last_indexed_commit_at_start,
-                    productionUntouched=False,
-                    rollbackAttempted=True,
-                    rollbackSuccess=True,
-                    logPath=str(log_path),
-                ),
                 log_path=log_path,
+                last_indexed_commit_at_start=last_indexed_commit_at_start,
             )
 
         stage = "git_validation"
@@ -284,6 +262,43 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
     finally:
         lock_manager.release()
         logger.info("Lock released: %s", state_store.lock_path)
+
+
+def run_rollback(
+    config: ProjectConfig,
+    state_store: StateStore,
+    *,
+    log_path: Path,
+    last_indexed_commit_at_start: str | None,
+) -> int:
+    logger = logging.getLogger(__name__)
+    production_log_path = _derive_related_log_path(log_path, "mcp-production")
+    perform_manual_rollback(
+        config,
+        state_store,
+        production_log_path,
+        docker_runner=default_docker_runner,
+        production_smoke_runner=lambda current_config: run_production_smoke_test(
+            current_config,
+            docker_runner=default_docker_runner,
+        ),
+    )
+    logger.info("Manual rollback completed successfully.")
+    return _handle_success_notification_and_cleanup(
+        config,
+        NotificationPayload(
+            project=config.project,
+            status="rollback",
+            stage="manual_rollback",
+            targetCommit=None,
+            lastIndexedCommit=last_indexed_commit_at_start,
+            productionUntouched=False,
+            rollbackAttempted=True,
+            rollbackSuccess=True,
+            logPath=str(log_path),
+        ),
+        log_path=log_path,
+    )
 
 
 def _log_dry_run_summary(

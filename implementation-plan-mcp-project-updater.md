@@ -56,8 +56,8 @@
 
 ## Phase 8. Orchestration and Test Coverage
 
-- [ ] Собрать `run_update(...)`
-- [ ] Собрать `run_rollback(...)`
+- [x] Собрать `run_update(...)`
+- [x] Собрать `run_rollback(...)`
 - [x] Добавить unit tests
-- [ ] Добавить integration-style tests с mock command runners
+- [x] Добавить integration-style tests с mock command runners
 - [x] Обновить план по факту реализации

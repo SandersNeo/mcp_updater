@@ -140,7 +140,7 @@ def test_main_dry_run_returns_success(tmp_path: Path, monkeypatch) -> None:
 
 def test_main_returns_warning_for_phase2_only_workflow(tmp_path: Path, monkeypatch) -> None:
     config_path = _write_config(tmp_path)
-    _mock_phase2_dependencies(monkeypatch, create_report=True)
+    _mock_phase2_dependencies(monkeypatch, create_report=True, complete_phase4=True, complete_phase5=True)
 
     result = main(["--config", str(config_path)])
 
@@ -160,7 +160,13 @@ def test_main_returns_success_when_no_changes_and_not_forced(tmp_path: Path, mon
     assert result == ExitCode.SUCCESS
 
 
-def _mock_phase2_dependencies(monkeypatch, commit: str = "abc123", create_report: bool = False) -> None:
+def _mock_phase2_dependencies(
+    monkeypatch,
+    commit: str = "abc123",
+    create_report: bool = False,
+    complete_phase4: bool = False,
+    complete_phase5: bool = False,
+) -> None:
     monkeypatch.setattr(
         "mcp_project_updater.cli.validate_repo",
         lambda repo_path: RepoValidationResult(
@@ -184,3 +190,34 @@ def _mock_phase2_dependencies(monkeypatch, commit: str = "abc123", create_report
             return type("ParserResult", (), {"returncode": 0})()
 
         monkeypatch.setattr("mcp_project_updater.cli.run_parser", _fake_run_parser)
+    if complete_phase4:
+        monkeypatch.setattr("mcp_project_updater.cli.ensure_docker_available", lambda: "26.1.0")
+        monkeypatch.setattr(
+            "mcp_project_updater.cli.start_build_container",
+            lambda mcp_config, build_paths, paths_config, runner: type(
+                "BuildContainerResult",
+                (),
+                {"command": ["docker", "run"], "container_id": "cid"},
+            )(),
+        )
+        monkeypatch.setattr(
+            "mcp_project_updater.cli.run_infrastructure_smoke_test",
+            lambda smoke_config, context, runner: type(
+                "SmokeResult",
+                (),
+                {"http_status_code": 404},
+            )(),
+        )
+        monkeypatch.setattr(
+            "mcp_project_updater.cli.write_container_logs",
+            lambda container_name, output_path, runner: output_path,
+        )
+    if complete_phase5:
+        monkeypatch.setattr(
+            "mcp_project_updater.cli.run_tool_smoke_test",
+            lambda config, tool_smoke_config, working_directory, url: type(
+                "ToolSmokeResult",
+                (),
+                {"stdout": '{"ok":true}'},
+            )(),
+        )

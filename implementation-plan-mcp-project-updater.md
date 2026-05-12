@@ -29,16 +29,16 @@
 
 ## Phase 4. Docker and Infrastructure Smoke
 
-- [ ] Реализовать `docker_ops.py`
-- [ ] Реализовать `mcp_container.py`
-- [ ] Реализовать `smoke_infrastructure.py`
-- [ ] Сохранять docker logs в отдельные файлы
+- [x] Реализовать `docker_ops.py`
+- [x] Реализовать `mcp_container.py`
+- [x] Реализовать `smoke_infrastructure.py`
+- [x] Сохранять docker logs в отдельные файлы
 
 ## Phase 5. MCP Tool Smoke
 
-- [ ] Реализовать пакет `mcp_smoke_test/`
-- [ ] Реализовать `smoke_tool.py`
-- [ ] Поддержать `tools/list`, `metadatasearch`, `codesearch`
+- [x] Реализовать пакет `mcp_smoke_test/`
+- [x] Реализовать `smoke_tool.py`
+- [x] Поддержать `tools/list`, `metadatasearch`, `codesearch`
 
 ## Phase 6. Production Switch and Rollback
 

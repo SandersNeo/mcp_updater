@@ -8,10 +8,14 @@ from typing import Sequence
 
 from .config import ProjectConfig, load_project_config
 from .constants import ExitCode
+from .docker_ops import default_docker_runner, ensure_docker_available, write_container_logs
 from .git_ops import determine_target_commit, validate_repo
 from .lock import LockManager
+from .mcp_container import start_build_container
 from .parser_runner import run_parser
 from .report_validator import validate_report
+from .smoke_infrastructure import InfrastructureSmokeContext, run_infrastructure_smoke_test
+from .smoke_tool import run_tool_smoke_test
 from .source_detector import SourceDetectionResult, detect_sources
 from .staging import generate_parser_config, prepare_build_code_directory, prepare_build_staging, write_parser_config
 from .state import StateSnapshot, StateStore
@@ -60,7 +64,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         logger = logging.getLogger(__name__)
         logger.info("Loaded config for project '%s'.", config.project)
         logger.info("Log file: %s", log_path)
-        return run_update(config, options)
+        return run_update(config, options, log_path=log_path)
     except UpdaterError as exc:
         if logging.getLogger().handlers:
             logging.getLogger(__name__).error(str(exc))
@@ -69,7 +73,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return int(exc.exit_code)
 
 
-def run_update(config: ProjectConfig, options: CliOptions) -> int:
+def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) -> int:
     logger = logging.getLogger(__name__)
     state_store = StateStore(config.paths.state_root)
     lock_manager = LockManager(
@@ -141,7 +145,50 @@ def run_update(config: ProjectConfig, options: CliOptions) -> int:
         prepare_build_code_directory(build_paths, source_result)
         logger.info("Prepared build code directory: %s", build_paths.code)
 
-        logger.warning("Phase 3 workflow completed. Docker/switch stages are not implemented yet.")
+        docker_version = ensure_docker_available()
+        logger.info("Docker available: %s", docker_version)
+
+        build_container_result = start_build_container(
+            config.mcp,
+            build_paths,
+            config.paths,
+            runner=default_docker_runner,
+        )
+        logger.info("Started build container: %s", config.mcp.build.container_name)
+        logger.debug("Build container command: %s", build_container_result.command)
+
+        smoke_result = run_infrastructure_smoke_test(
+            config.smoke_test.infrastructure,
+            InfrastructureSmokeContext(
+                container_name=config.mcp.build.container_name,
+                host_port=config.mcp.build.host_port,
+                url=config.mcp.build.url,
+                chroma_path=config.paths.chroma_root / "build",
+            ),
+            runner=default_docker_runner,
+        )
+        logger.info("Infrastructure smoke-test passed with HTTP status %s", smoke_result.http_status_code)
+
+        if config.smoke_test.tool_smoke_test.enabled:
+            tool_smoke_result = run_tool_smoke_test(
+                config,
+                config.smoke_test.tool_smoke_test,
+                working_directory=config.repo.path,
+                url=config.mcp.build.url,
+            )
+            logger.info("Tool smoke-test passed: %s", tool_smoke_result.stdout.strip() or "<no output>")
+        else:
+            logger.warning("MCP tool smoke-test skipped")
+
+        build_log_path = _derive_related_log_path(log_path, "mcp-build")
+        write_container_logs(
+            config.mcp.build.container_name,
+            build_log_path,
+            runner=default_docker_runner,
+        )
+        logger.info("Saved build container logs: %s", build_log_path)
+
+        logger.warning("Phase 4 workflow completed. Tool smoke-test and switch stages are not implemented yet.")
         return ExitCode.SUCCESS_WITH_WARNINGS
     finally:
         lock_manager.release()
@@ -176,3 +223,10 @@ def _log_dry_run_summary(
     logger.info("Production URL: %s", config.mcp.production.url)
     logger.info("Smoke profile: %s", config.smoke_test.profile)
     logger.info("Tool smoke-test enabled: %s", config.smoke_test.tool_smoke_test.enabled)
+
+
+def _derive_related_log_path(update_log_path: Path, suffix: str) -> Path:
+    file_name = update_log_path.name
+    if file_name.endswith("-update.log"):
+        return update_log_path.with_name(file_name.replace("-update.log", f"-{suffix}.log"))
+    return update_log_path.with_name(f"{update_log_path.stem}-{suffix}.log")

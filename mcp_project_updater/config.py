@@ -290,14 +290,23 @@ def _parse_project_config(raw: dict[str, Any], config_path: Path) -> ProjectConf
                 tool_path=_expect_path_string(tool_raw.get("toolPath"), "smokeTest.toolSmokeTest.toolPath"),
                 url=_expect_string(tool_raw.get("url"), "smokeTest.toolSmokeTest.url"),
                 timeout_seconds=_expect_int(tool_raw.get("timeoutSeconds"), "smokeTest.toolSmokeTest.timeoutSeconds"),
-                metadata_tool_name=_expect_string(tool_raw.get("metadataToolName"), "smokeTest.toolSmokeTest.metadataToolName"),
+                metadata_tool_name=_expect_string(
+                    tool_raw.get("metadataToolName", "metadatasearch"),
+                    "smokeTest.toolSmokeTest.metadataToolName",
+                ),
                 metadata_query_argument=_expect_string(
-                    tool_raw.get("metadataQueryArgument"),
+                    tool_raw.get("metadataQueryArgument", "query"),
                     "smokeTest.toolSmokeTest.metadataQueryArgument",
                 ),
                 metadata_queries=[str(item) for item in tool_raw.get("metadataQueries", [])],
-                code_tool_name=_expect_string(tool_raw.get("codeToolName"), "smokeTest.toolSmokeTest.codeToolName"),
-                code_query_argument=_expect_string(tool_raw.get("codeQueryArgument"), "smokeTest.toolSmokeTest.codeQueryArgument"),
+                code_tool_name=_expect_string(
+                    tool_raw.get("codeToolName", "codesearch"),
+                    "smokeTest.toolSmokeTest.codeToolName",
+                ),
+                code_query_argument=_expect_string(
+                    tool_raw.get("codeQueryArgument", "query"),
+                    "smokeTest.toolSmokeTest.codeQueryArgument",
+                ),
                 code_queries=[str(item) for item in tool_raw.get("codeQueries", [])],
             ),
         ),
@@ -361,4 +370,3 @@ def _validate_project_config(config: ProjectConfig) -> None:
     if config.notifications.enabled and (config.notifications.on_failure or config.notifications.on_rollback):
         if not config.notifications.webhook_url_env:
             raise ConfigValidationError("Field 'notifications.webhookUrlEnv' must be set when notifications are enabled.")
-

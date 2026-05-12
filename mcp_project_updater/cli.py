@@ -12,6 +12,7 @@ from .docker_ops import default_docker_runner, ensure_docker_available, write_co
 from .git_ops import determine_target_commit, validate_repo
 from .lock import LockManager
 from .mcp_container import start_build_container
+from .notifications import NotificationPayload, cleanup_old_logs, send_notification
 from .parser_runner import run_parser
 from .report_validator import validate_report
 from .rollback import perform_manual_rollback
@@ -86,9 +87,17 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
 
     lock_manager.acquire()
     logger.info("Lock acquired: %s", state_store.lock_path)
+    stage = "startup"
+    target_commit: str | None = None
+    last_indexed_commit_at_start = state_store.read_last_indexed_commit()
+    production_untouched = True
+    rollback_attempted = False
+    rollback_success: bool | None = None
 
     try:
         if options.rollback:
+            stage = "manual_rollback"
+            production_untouched = False
             perform_manual_rollback(
                 config,
                 state_store,
@@ -100,12 +109,28 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
                 ),
             )
             logger.info("Manual rollback completed successfully.")
-            return ExitCode.SUCCESS
+            return _handle_success_notification_and_cleanup(
+                config,
+                NotificationPayload(
+                    project=config.project,
+                    status="rollback",
+                    stage=stage,
+                    targetCommit=None,
+                    lastIndexedCommit=last_indexed_commit_at_start,
+                    productionUntouched=False,
+                    rollbackAttempted=True,
+                    rollbackSuccess=True,
+                    logPath=str(log_path),
+                ),
+                log_path=log_path,
+            )
 
+        stage = "git_validation"
         repo_validation = validate_repo(config.repo.path)
         if repo_validation.untracked_changes:
             logger.warning("Untracked Git changes detected but ignored for MVP: %s", repo_validation.untracked_changes)
 
+        stage = "git_target_commit"
         target_commit = determine_target_commit(
             config.repo.path,
             config.repo.branch,
@@ -113,6 +138,8 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
             no_git_pull=options.no_git_pull,
         )
         state_snapshot = state_store.read_snapshot()
+        last_indexed_commit_at_start = state_snapshot.last_indexed_commit
+        stage = "source_detection"
         source_result = detect_sources(
             config.repo.path,
             config.sources.main_config_path,
@@ -137,9 +164,11 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
             _log_dry_run_summary(logger, config, options, state_snapshot, target_commit, source_result)
             return ExitCode.SUCCESS
 
+        stage = "staging"
         build_paths = prepare_build_staging(config.paths.staging_root, config.project)
         parser_config_payload = generate_parser_config(config, build_paths)
         parser_config_path = write_parser_config(build_paths, parser_config_payload)
+        stage = "parser"
         parser_result = run_parser(
             config.parser,
             parser_config_path,
@@ -148,6 +177,7 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
         )
         logger.info("Parser exit code: %s", parser_result.returncode)
 
+        stage = "report_validation"
         report_result = validate_report(
             build_paths.report_path,
             config.smoke_test.report_validation,
@@ -155,12 +185,15 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
         )
         logger.info("Validated report: %s (%s bytes)", report_result.report_path, report_result.report_size)
 
+        stage = "code_prepare"
         prepare_build_code_directory(build_paths, source_result)
         logger.info("Prepared build code directory: %s", build_paths.code)
 
+        stage = "docker_availability"
         docker_version = ensure_docker_available()
         logger.info("Docker available: %s", docker_version)
 
+        stage = "build_container"
         build_container_result = start_build_container(
             config.mcp,
             build_paths,
@@ -168,8 +201,8 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
             runner=default_docker_runner,
         )
         logger.info("Started build container: %s", config.mcp.build.container_name)
-        logger.debug("Build container command: %s", build_container_result.command)
 
+        stage = "build_infrastructure_smoke"
         smoke_result = run_infrastructure_smoke_test(
             config.smoke_test.infrastructure,
             InfrastructureSmokeContext(
@@ -183,6 +216,7 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
         logger.info("Infrastructure smoke-test passed with HTTP status %s", smoke_result.http_status_code)
 
         if config.smoke_test.tool_smoke_test.enabled:
+            stage = "build_tool_smoke"
             tool_smoke_result = run_tool_smoke_test(
                 config,
                 config.smoke_test.tool_smoke_test,
@@ -201,6 +235,8 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
         )
         logger.info("Saved build container logs: %s", build_log_path)
 
+        stage = "switch"
+        production_untouched = False
         production_log_path = _derive_related_log_path(log_path, "mcp-production")
         switch_result = perform_switch(
             config,
@@ -210,7 +246,41 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
             docker_runner=default_docker_runner,
         )
         logger.info("Production switch completed for commit %s", switch_result.target_commit)
-        return ExitCode.SUCCESS
+        stage = "success"
+        return _handle_success_notification_and_cleanup(
+            config,
+            NotificationPayload(
+                project=config.project,
+                status="success",
+                stage=stage,
+                targetCommit=target_commit,
+                lastIndexedCommit=state_store.read_last_indexed_commit(),
+                productionUntouched=False,
+                rollbackAttempted=False,
+                rollbackSuccess=None,
+                logPath=str(log_path),
+            ),
+            log_path=log_path,
+        )
+    except UpdaterError as exc:
+        rollback_attempted = exc.exit_code in {ExitCode.PRODUCTION_SMOKE_FAILED, ExitCode.ROLLBACK_FAILED}
+        rollback_success = True if exc.exit_code == ExitCode.PRODUCTION_SMOKE_FAILED else (False if exc.exit_code == ExitCode.ROLLBACK_FAILED else None)
+        _handle_failure_notification_and_cleanup(
+            config,
+            NotificationPayload(
+                project=config.project,
+                status="rollback" if rollback_attempted else "failed",
+                stage=stage,
+                targetCommit=target_commit,
+                lastIndexedCommit=last_indexed_commit_at_start,
+                productionUntouched=production_untouched,
+                rollbackAttempted=rollback_attempted,
+                rollbackSuccess=rollback_success,
+                logPath=str(log_path),
+            ),
+            logger=logger,
+        )
+        raise
     finally:
         lock_manager.release()
         logger.info("Lock released: %s", state_store.lock_path)
@@ -251,3 +321,50 @@ def _derive_related_log_path(update_log_path: Path, suffix: str) -> Path:
     if file_name.endswith("-update.log"):
         return update_log_path.with_name(file_name.replace("-update.log", f"-{suffix}.log"))
     return update_log_path.with_name(f"{update_log_path.stem}-{suffix}.log")
+
+
+def _handle_success_notification_and_cleanup(
+    config: ProjectConfig,
+    payload: NotificationPayload,
+    *,
+    log_path: Path,
+) -> int:
+    logger = logging.getLogger(__name__)
+    removed_logs = cleanup_old_logs(config.paths.logs_root, config.retention.keep_logs_days)
+    if removed_logs:
+        logger.info("Removed old logs: %s", [str(path) for path in removed_logs])
+
+    if not config.notifications.enabled or (not config.notifications.on_success and payload.status == "success"):
+        return ExitCode.SUCCESS
+    if payload.status == "rollback" and not config.notifications.on_rollback:
+        return ExitCode.SUCCESS
+
+    try:
+        send_notification(config.notifications, payload)
+    except Exception as exc:
+        logger.warning("Notification warning: %s", exc)
+        return ExitCode.SUCCESS_WITH_WARNINGS
+    return ExitCode.SUCCESS
+
+
+def _handle_failure_notification_and_cleanup(
+    config: ProjectConfig,
+    payload: NotificationPayload,
+    *,
+    logger: logging.Logger,
+) -> None:
+    removed_logs = cleanup_old_logs(config.paths.logs_root, config.retention.keep_logs_days)
+    if removed_logs:
+        logger.info("Removed old logs: %s", [str(path) for path in removed_logs])
+
+    if payload.status == "rollback":
+        enabled = config.notifications.enabled and config.notifications.on_rollback
+    else:
+        enabled = config.notifications.enabled and config.notifications.on_failure
+    if not enabled:
+        return
+
+    try:
+        send_notification(config.notifications, payload)
+    except Exception as exc:
+        logger.warning("Notification warning: %s", exc)

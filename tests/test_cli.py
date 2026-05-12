@@ -166,6 +166,29 @@ def test_main_returns_success_when_no_changes_and_not_forced(tmp_path: Path, mon
     assert result == ExitCode.SUCCESS
 
 
+def test_main_returns_warning_when_success_notification_fails(tmp_path: Path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    payload["notifications"]["onSuccess"] = True
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    _mock_phase2_dependencies(
+        monkeypatch,
+        create_report=True,
+        complete_phase4=True,
+        complete_phase5=True,
+        complete_phase6=True,
+    )
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.send_notification",
+        lambda *args, **kwargs: (_ for _ in ()).throw(Exception("boom")),
+    )
+
+    result = main(["--config", str(config_path)])
+
+    assert result == ExitCode.SUCCESS_WITH_WARNINGS
+
+
 def _mock_phase2_dependencies(
     monkeypatch,
     commit: str = "abc123",

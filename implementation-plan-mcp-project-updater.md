@@ -50,9 +50,9 @@
 
 ## Phase 7. Notifications and Retention
 
-- [ ] Реализовать `notifications.py`
-- [ ] Реализовать retention cleanup
-- [ ] Замаскировать секреты в логах
+- [x] Реализовать `notifications.py`
+- [x] Реализовать retention cleanup
+- [x] Замаскировать секреты в логах
 
 ## Phase 8. Orchestration and Test Coverage
 

@@ -14,12 +14,14 @@ from .lock import LockManager
 from .mcp_container import start_build_container
 from .parser_runner import run_parser
 from .report_validator import validate_report
+from .rollback import perform_manual_rollback
 from .smoke_infrastructure import InfrastructureSmokeContext, run_infrastructure_smoke_test
 from .smoke_tool import run_tool_smoke_test
 from .source_detector import SourceDetectionResult, detect_sources
 from .staging import generate_parser_config, prepare_build_code_directory, prepare_build_staging, write_parser_config
 from .state import StateSnapshot, StateStore
-from .errors import UpdaterError, WorkflowNotImplementedError
+from .switcher import perform_switch, run_production_smoke_test
+from .errors import UpdaterError
 from .logging_setup import setup_logging
 
 
@@ -87,7 +89,18 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
 
     try:
         if options.rollback:
-            raise WorkflowNotImplementedError("Manual rollback workflow is not implemented yet.")
+            perform_manual_rollback(
+                config,
+                state_store,
+                _derive_related_log_path(log_path, "mcp-production"),
+                docker_runner=default_docker_runner,
+                production_smoke_runner=lambda current_config: run_production_smoke_test(
+                    current_config,
+                    docker_runner=default_docker_runner,
+                ),
+            )
+            logger.info("Manual rollback completed successfully.")
+            return ExitCode.SUCCESS
 
         repo_validation = validate_repo(config.repo.path)
         if repo_validation.untracked_changes:
@@ -188,8 +201,16 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
         )
         logger.info("Saved build container logs: %s", build_log_path)
 
-        logger.warning("Phase 4 workflow completed. Tool smoke-test and switch stages are not implemented yet.")
-        return ExitCode.SUCCESS_WITH_WARNINGS
+        production_log_path = _derive_related_log_path(log_path, "mcp-production")
+        switch_result = perform_switch(
+            config,
+            state_store,
+            target_commit,
+            production_log_path,
+            docker_runner=default_docker_runner,
+        )
+        logger.info("Production switch completed for commit %s", switch_result.target_commit)
+        return ExitCode.SUCCESS
     finally:
         lock_manager.release()
         logger.info("Lock released: %s", state_store.lock_path)

@@ -42,11 +42,11 @@
 
 ## Phase 6. Production Switch and Rollback
 
-- [ ] Реализовать `switcher.py`
-- [ ] Реализовать `rollback.py`
-- [ ] Реализовать `run_production_smoke_test(...)`
-- [ ] Реализовать automatic rollback
-- [ ] Реализовать manual rollback
+- [x] Реализовать `switcher.py`
+- [x] Реализовать `rollback.py`
+- [x] Реализовать `run_production_smoke_test(...)`
+- [x] Реализовать automatic rollback
+- [x] Реализовать manual rollback
 
 ## Phase 7. Notifications and Retention
 

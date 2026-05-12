@@ -138,13 +138,19 @@ def test_main_dry_run_returns_success(tmp_path: Path, monkeypatch) -> None:
     assert result == ExitCode.SUCCESS
 
 
-def test_main_returns_warning_for_phase2_only_workflow(tmp_path: Path, monkeypatch) -> None:
+def test_main_returns_success_for_mocked_full_workflow(tmp_path: Path, monkeypatch) -> None:
     config_path = _write_config(tmp_path)
-    _mock_phase2_dependencies(monkeypatch, create_report=True, complete_phase4=True, complete_phase5=True)
+    _mock_phase2_dependencies(
+        monkeypatch,
+        create_report=True,
+        complete_phase4=True,
+        complete_phase5=True,
+        complete_phase6=True,
+    )
 
     result = main(["--config", str(config_path)])
 
-    assert result == ExitCode.SUCCESS_WITH_WARNINGS
+    assert result == ExitCode.SUCCESS
 
 
 def test_main_returns_success_when_no_changes_and_not_forced(tmp_path: Path, monkeypatch) -> None:
@@ -166,6 +172,7 @@ def _mock_phase2_dependencies(
     create_report: bool = False,
     complete_phase4: bool = False,
     complete_phase5: bool = False,
+    complete_phase6: bool = False,
 ) -> None:
     monkeypatch.setattr(
         "mcp_project_updater.cli.validate_repo",
@@ -219,5 +226,14 @@ def _mock_phase2_dependencies(
                 "ToolSmokeResult",
                 (),
                 {"stdout": '{"ok":true}'},
+            )(),
+        )
+    if complete_phase6:
+        monkeypatch.setattr(
+            "mcp_project_updater.cli.perform_switch",
+            lambda config, state_store, target_commit, production_log_path, docker_runner: type(
+                "SwitchResult",
+                (),
+                {"target_commit": target_commit, "production_log_path": production_log_path},
             )(),
         )

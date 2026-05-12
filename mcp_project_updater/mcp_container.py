@@ -5,7 +5,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import MCPConfig, PathsConfig
+from .config import MCPConfig, MCPInstanceConfig, PathsConfig
 from .constants import ExitCode
 from .docker_ops import DockerCommandResult, DockerCommandRunner, remove_container, run_docker_command
 from .errors import UpdaterError
@@ -19,6 +19,12 @@ class MissingSecretEnvError(UpdaterError):
 
 @dataclass(slots=True)
 class BuildContainerStartResult:
+    command: list[str]
+    container_id: str
+
+
+@dataclass(slots=True)
+class ContainerStartResult:
     command: list[str]
     container_id: str
 
@@ -47,18 +53,21 @@ def build_container_environment(mcp_config: MCPConfig, extra_env: dict[str, str]
     return environment
 
 
-def build_build_container_command(
+def build_runtime_container_command(
     mcp_config: MCPConfig,
-    build_paths: BuildPaths,
-    paths_config: PathsConfig,
+    instance_config: MCPInstanceConfig,
+    *,
+    metadata_path: Path,
+    code_path: Path,
+    chroma_path: Path,
+    reset_database: bool,
 ) -> list[str]:
-    chroma_build_path = paths_config.chroma_root / "build"
     resolved_secret_env = resolve_secret_environment(mcp_config.secret_env)
     container_env = build_container_environment(
         mcp_config,
         {
             **resolved_secret_env,
-            "RESET_DATABASE": _bool_to_env(True),
+            "RESET_DATABASE": _bool_to_env(reset_database),
             "RESET_CACHE": _bool_to_env(mcp_config.reset_cache),
             "USESSE": _bool_to_env(mcp_config.use_sse),
         },
@@ -69,7 +78,7 @@ def build_build_container_command(
         "run",
         "-d",
         "--name",
-        mcp_config.build.container_name,
+        instance_config.container_name,
     ]
 
     for key, value in container_env.items():
@@ -81,17 +90,62 @@ def build_build_container_command(
     command.extend(
         [
             "-p",
-            f"{mcp_config.build.host_port}:{mcp_config.container_port}",
+            f"{instance_config.host_port}:{mcp_config.container_port}",
             "-v",
-            f"{build_paths.metadata}:/app/metadata",
+            f"{metadata_path}:/app/metadata",
             "-v",
-            f"{build_paths.code}:/app/code",
+            f"{code_path}:/app/code",
             "-v",
-            f"{chroma_build_path}:/app/chroma_db",
+            f"{chroma_path}:/app/chroma_db",
             mcp_config.image,
         ]
     )
     return command
+
+
+def build_build_container_command(
+    mcp_config: MCPConfig,
+    build_paths: BuildPaths,
+    paths_config: PathsConfig,
+) -> list[str]:
+    return build_runtime_container_command(
+        mcp_config,
+        mcp_config.build,
+        metadata_path=build_paths.metadata,
+        code_path=build_paths.code,
+        chroma_path=paths_config.chroma_root / "build",
+        reset_database=True,
+    )
+
+
+def build_production_container_command(
+    mcp_config: MCPConfig,
+    paths_config: PathsConfig,
+) -> list[str]:
+    return build_runtime_container_command(
+        mcp_config,
+        mcp_config.production,
+        metadata_path=paths_config.staging_root / "current" / "metadata",
+        code_path=paths_config.staging_root / "current" / "code",
+        chroma_path=paths_config.chroma_root / "current",
+        reset_database=False,
+    )
+
+
+def start_production_container(
+    mcp_config: MCPConfig,
+    paths_config: PathsConfig,
+    *,
+    runner: DockerCommandRunner,
+) -> ContainerStartResult:
+    command = build_production_container_command(mcp_config, paths_config)
+    result = run_docker_command(
+        command,
+        runner=runner,
+        error_code=ExitCode.PRODUCTION_SWITCH_FAILED,
+        failure_message=f"Failed to start production container '{mcp_config.production.container_name}'.",
+    )
+    return ContainerStartResult(command=command, container_id=result.stdout.strip())
 
 
 def start_build_container(

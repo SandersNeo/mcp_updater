@@ -150,7 +150,7 @@ python .\mcp_smoke_test.py --config .\project.json
 - `smokeTest.profile` должен быть `dev` или `production`
 - при `smokeTest.profile=production` нельзя выключать `toolSmokeTest.enabled`
 
-Пример структуры можно посмотреть в тестах: [tests/test_cli.py](./tests/test_cli.py)
+Готовый шаблон конфига: [project.example.json](./project.example.json)
 
 ## Exit codes
 
@@ -184,3 +184,4 @@ pytest -q
 - [prd-mcp-project-updater.md](./prd-mcp-project-updater.md)
 - [dev-spec-mcp-project-updater.md](./dev-spec-mcp-project-updater.md)
 - [implementation-plan-mcp-project-updater.md](./implementation-plan-mcp-project-updater.md)
+- [acceptance-checklist.md](./acceptance-checklist.md)

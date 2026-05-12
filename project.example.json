@@ -1,0 +1,117 @@
+{
+  "project": "orders",
+  "repo": {
+    "path": "C:/work/orders-repo",
+    "branch": "master",
+    "remote": "origin",
+    "pullMode": "ff-only"
+  },
+  "sources": {
+    "mainConfigPath": "src/cf",
+    "mainConfigRequired": true,
+    "extensionPath": "src/cfe",
+    "extensionRequired": false
+  },
+  "parser": {
+    "toolPath": "C:/tools/onec/generate_config_report.py",
+    "encoding": "utf-8",
+    "warningsAsErrors": false,
+    "buildXmlOverrides": true,
+    "allowedExitCodes": [0, 1]
+  },
+  "mcp": {
+    "image": "your-registry/onec-mcp:latest",
+    "containerPort": 8000,
+    "production": {
+      "containerName": "mcp-orders",
+      "hostPort": 8100,
+      "url": "http://localhost:8100/mcp"
+    },
+    "build": {
+      "containerName": "mcp-orders-build",
+      "hostPort": 18100,
+      "url": "http://localhost:18100/mcp"
+    },
+    "indexCode": true,
+    "indexMetadata": true,
+    "indexHelp": false,
+    "resetDatabaseOnBuild": true,
+    "resetCache": false,
+    "useSse": false,
+    "useGpu": false,
+    "env": {
+      "METADATA_PATH": "/app/metadata",
+      "CODE_PATH": "/app/code"
+    },
+    "secretEnv": {
+      "LICENSE_KEY": "ONERPA_LICENSE_KEY"
+    }
+  },
+  "paths": {
+    "stagingRoot": "C:/mcp-updater-data/orders/staging",
+    "chromaRoot": "C:/mcp-updater-data/orders/chroma",
+    "stateRoot": "C:/mcp-updater-data/orders/state",
+    "logsRoot": "C:/mcp-updater-data/orders/logs"
+  },
+  "smokeTest": {
+    "enabled": true,
+    "profile": "production",
+    "reportValidation": {
+      "enabled": true,
+      "requiredReportPatterns": [
+        "Имя: \"",
+        "Синоним: \""
+      ],
+      "forbiddenReportPatterns": []
+    },
+    "infrastructure": {
+      "enabled": true,
+      "timeoutSeconds": 120,
+      "checkIntervalSeconds": 5,
+      "httpReadyUrl": "http://localhost:18100/mcp",
+      "acceptableHttpStatusCodes": [200],
+      "requireChromaNotEmpty": true,
+      "logTailLines": 200,
+      "logErrorPatterns": [
+        "Traceback",
+        "Unhandled exception",
+        "ERROR"
+      ],
+      "logReadyPatterns": [
+        "Started",
+        "Application startup complete"
+      ]
+    },
+    "toolSmokeTest": {
+      "enabled": true,
+      "toolPath": "C:/im/Devops/MCP Updater/mcp_smoke_test.py",
+      "url": "http://localhost:18100/mcp",
+      "timeoutSeconds": 60,
+      "metadataToolName": "metadatasearch",
+      "metadataQueryArgument": "query",
+      "metadataQueries": [
+        "Конфигурации"
+      ],
+      "codeToolName": "codesearch",
+      "codeQueryArgument": "query",
+      "codeQueries": [
+        "Процедура"
+      ]
+    }
+  },
+  "notifications": {
+    "enabled": true,
+    "onSuccess": true,
+    "onFailure": true,
+    "onRollback": true,
+    "webhookUrlEnv": "MCP_UPDATE_WEBHOOK_URL"
+  },
+  "retention": {
+    "keepPreviousIndexes": 1,
+    "keepLogsDays": 30,
+    "keepStagingBuilds": 2
+  },
+  "rollback": {
+    "preserveFailedIndex": true
+  }
+}

@@ -1,0 +1,2 @@
+"""MCP smoke test package."""
+

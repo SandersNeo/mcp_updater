@@ -1,0 +1,58 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+from .constants import ExitCode
+from .errors import UpdaterError
+
+
+class SourceDetectionError(UpdaterError):
+    pass
+
+
+@dataclass(slots=True)
+class SourceDetectionResult:
+    main_exists: bool
+    extension_exists: bool
+    main_path: Path | None
+    extension_path: Path | None
+
+
+def detect_sources(
+    repo_path: Path,
+    main_config_path: str,
+    main_config_required: bool,
+    extension_path: str,
+    extension_required: bool,
+) -> SourceDetectionResult:
+    resolved_main_path = repo_path / main_config_path
+    resolved_extension_path = repo_path / extension_path
+
+    main_exists = resolved_main_path.exists()
+    extension_exists = resolved_extension_path.exists()
+
+    if main_config_required and not main_exists:
+        raise SourceDetectionError(
+            f"Required main configuration source is missing: {resolved_main_path}",
+            ExitCode.MAIN_CONFIG_REQUIRED_MISSING,
+        )
+
+    if extension_required and not extension_exists:
+        raise SourceDetectionError(
+            f"Required extension source is missing: {resolved_extension_path}",
+            ExitCode.EXTENSION_REQUIRED_MISSING,
+        )
+
+    if not main_exists and not extension_exists:
+        raise SourceDetectionError(
+            f"Neither main nor extension source exists under repo '{repo_path}'.",
+            ExitCode.MISSING_SOURCES,
+        )
+
+    return SourceDetectionResult(
+        main_exists=main_exists,
+        extension_exists=extension_exists,
+        main_path=resolved_main_path if main_exists else None,
+        extension_path=resolved_extension_path if extension_exists else None,
+    )

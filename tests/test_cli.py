@@ -1,0 +1,186 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from mcp_project_updater.cli import main, parse_args
+from mcp_project_updater.constants import ExitCode
+from mcp_project_updater.git_ops import RepoValidationResult
+
+
+def _write_config(tmp_path: Path) -> Path:
+    repo_path = tmp_path / "repo"
+    (repo_path / "src" / "cf").mkdir(parents=True)
+    parser_path = tmp_path / "generate_config_report.py"
+    parser_path.write_text("print('ok')\n", encoding="utf-8")
+
+    payload = {
+        "project": "orders",
+        "repo": {
+            "path": str(repo_path),
+            "branch": "master",
+            "remote": "origin",
+            "pullMode": "ff-only",
+        },
+        "sources": {
+            "mainConfigPath": "src/cf",
+            "mainConfigRequired": False,
+            "extensionPath": "src/cfe",
+            "extensionRequired": False,
+        },
+        "parser": {
+            "toolPath": str(parser_path),
+            "encoding": "utf-8",
+            "warningsAsErrors": False,
+            "buildXmlOverrides": True,
+            "allowedExitCodes": [0, 1],
+        },
+        "mcp": {
+            "image": "example/image:latest",
+            "containerPort": 8000,
+            "production": {
+                "containerName": "mcp-orders",
+                "hostPort": 8100,
+                "url": "http://localhost:8100/mcp",
+            },
+            "build": {
+                "containerName": "mcp-orders-build",
+                "hostPort": 18100,
+                "url": "http://localhost:18100/mcp",
+            },
+            "indexCode": True,
+            "indexMetadata": True,
+            "indexHelp": False,
+            "resetDatabaseOnBuild": True,
+            "resetCache": False,
+            "useSse": False,
+            "useGpu": False,
+            "env": {"METADATA_PATH": "/app/metadata", "CODE_PATH": "/app/code"},
+            "secretEnv": {"LICENSE_KEY": "ONERPA_LICENSE_KEY"},
+        },
+        "paths": {
+            "stagingRoot": str(tmp_path / "staging"),
+            "chromaRoot": str(tmp_path / "chroma"),
+            "stateRoot": str(tmp_path / "state"),
+            "logsRoot": str(tmp_path / "logs"),
+        },
+        "smokeTest": {
+            "enabled": True,
+            "profile": "dev",
+            "reportValidation": {
+                "enabled": True,
+                "requiredReportPatterns": ['Имя: "', 'Синоним: "'],
+                "forbiddenReportPatterns": [],
+            },
+            "infrastructure": {
+                "enabled": True,
+                "timeoutSeconds": 60,
+                "checkIntervalSeconds": 5,
+                "httpReadyUrl": "http://localhost:18100/mcp",
+                "acceptableHttpStatusCodes": [200],
+                "requireChromaNotEmpty": True,
+                "logTailLines": 100,
+                "logErrorPatterns": ["Traceback"],
+                "logReadyPatterns": ["Started"],
+            },
+            "toolSmokeTest": {
+                "enabled": True,
+                "toolPath": str(tmp_path / "mcp_smoke_test.py"),
+                "url": "http://localhost:18100/mcp",
+                "timeoutSeconds": 60,
+                "metadataToolName": "metadatasearch",
+                "metadataQueryArgument": "query",
+                "metadataQueries": ["Конфигурации"],
+                "codeToolName": "codesearch",
+                "codeQueryArgument": "query",
+                "codeQueries": ["Процедура"],
+            },
+        },
+        "notifications": {
+            "enabled": True,
+            "onSuccess": False,
+            "onFailure": True,
+            "onRollback": True,
+            "webhookUrlEnv": "MCP_UPDATE_WEBHOOK_URL",
+        },
+        "retention": {
+            "keepPreviousIndexes": 1,
+            "keepLogsDays": 30,
+            "keepStagingBuilds": 2,
+        },
+        "rollback": {
+            "preserveFailedIndex": True,
+        },
+    }
+
+    tool_path = Path(payload["smokeTest"]["toolSmokeTest"]["toolPath"])
+    tool_path.write_text("print('ok')\n", encoding="utf-8")
+
+    config_path = tmp_path / "project.json"
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+    return config_path
+
+
+def test_parse_args() -> None:
+    options = parse_args(["--config", "project.json", "--force", "--dry-run"])
+
+    assert options.config_path.name == "project.json"
+    assert options.force is True
+    assert options.dry_run is True
+
+
+def test_main_dry_run_returns_success(tmp_path: Path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    _mock_phase2_dependencies(monkeypatch)
+
+    result = main(["--config", str(config_path), "--dry-run"])
+
+    assert result == ExitCode.SUCCESS
+
+
+def test_main_returns_warning_for_phase2_only_workflow(tmp_path: Path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    _mock_phase2_dependencies(monkeypatch, create_report=True)
+
+    result = main(["--config", str(config_path)])
+
+    assert result == ExitCode.SUCCESS_WITH_WARNINGS
+
+
+def test_main_returns_success_when_no_changes_and_not_forced(tmp_path: Path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    state_root = tmp_path / "state"
+    state_root.mkdir(parents=True, exist_ok=True)
+    (state_root / "last_indexed_commit").write_text("same-commit\n", encoding="utf-8")
+
+    _mock_phase2_dependencies(monkeypatch, commit="same-commit")
+
+    result = main(["--config", str(config_path)])
+
+    assert result == ExitCode.SUCCESS
+
+
+def _mock_phase2_dependencies(monkeypatch, commit: str = "abc123", create_report: bool = False) -> None:
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.validate_repo",
+        lambda repo_path: RepoValidationResult(
+            inside_work_tree=True,
+            tracked_changes=[],
+            untracked_changes=[],
+        ),
+    )
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.determine_target_commit",
+        lambda repo_path, branch, remote, no_git_pull: commit,
+    )
+    if create_report:
+        def _fake_run_parser(parser_config, parser_config_path, *, verbose, working_directory):
+            report_path = parser_config_path.parent / "metadata" / "Report.txt"
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(
+                '\t- Конфигурации.Orders\nИмя: "Orders"\nСиноним: "Orders"\n',
+                encoding="utf-8",
+            )
+            return type("ParserResult", (), {"returncode": 0})()
+
+        monkeypatch.setattr("mcp_project_updater.cli.run_parser", _fake_run_parser)

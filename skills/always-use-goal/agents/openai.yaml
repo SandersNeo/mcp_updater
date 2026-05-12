@@ -1,0 +1,4 @@
+interface:
+  display_name: "Always Use /goal"
+  short_description: "Use /goal in planning and progress updates whenever the user requires goal-first framing."
+  default_prompt: "Use /goal consistently in user-facing planning and progress messages while keeping commands and code syntactically valid."

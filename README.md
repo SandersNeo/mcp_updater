@@ -1,0 +1,186 @@
+# MCP Project Updater
+
+`mcp-project-updater` обновляет индексы MCP-проекта из Git-репозитория, прогоняет staging/build pipeline, выполняет build и production smoke-tests, переключает production на новый индекс и умеет делать rollback.
+
+Репозиторий содержит:
+
+- `update_mcp_project.py` — основной CLI для update и manual rollback
+- `mcp_smoke_test.py` — отдельный CLI для MCP tool smoke-test
+- `mcp_project_updater/` — основная логика updater-а
+- `mcp_smoke_test/` — клиент и CLI для smoke-проверки MCP tools
+- `tests/` — unit и integration-style тесты
+
+## Что уже реализовано
+
+- загрузка и валидация `project.json`
+- lock/state management
+- работа с Git target commit
+- source detection для `src/cf` и `src/cfe`
+- staging + parser config generation + report validation
+- build container startup
+- infrastructure smoke-test
+- MCP tool smoke-test
+- production switch
+- automatic rollback и manual rollback
+- notifications + log retention cleanup
+- orchestration workflow с тестовым покрытием
+
+## Требования
+
+- Python `3.11+`
+- Docker
+- Git
+- внешний parser tool, путь к которому указывается в `project.json`
+- секреты из `mcp.secretEnv` должны быть доступны в переменных окружения
+
+## Установка
+
+```bash
+python -m venv .venv
+. .venv/bin/activate
+pip install -e .
+```
+
+Для Windows PowerShell:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -e .
+```
+
+## Основной запуск
+
+```powershell
+python .\update_mcp_project.py --config .\project.json
+```
+
+Поддерживаемые флаги:
+
+- `--config` — путь к `project.json`
+- `--force` — переиндексировать даже если `target_commit == last_indexed_commit`
+- `--no-git-pull` — использовать текущий `HEAD` без `fetch/pull`
+- `--rollback` — выполнить manual rollback `current <-> previous`
+- `--verbose` — более подробный лог
+- `--dry-run` — только валидация и расчёт плана без parser/docker/switch
+
+PowerShell wrapper:
+
+```powershell
+.\update-mcp-project.ps1 -ConfigPath .\project.json
+```
+
+## MCP Smoke Test
+
+Отдельный smoke-test runner можно запускать напрямую:
+
+```powershell
+python .\mcp_smoke_test.py --config .\project.json
+```
+
+Он проверяет:
+
+- `tools/list`
+- metadata tool, по умолчанию `metadatasearch`
+- code tool, по умолчанию `codesearch`
+
+Названия tools и имена аргументов настраиваются в `smokeTest.toolSmokeTest`.
+
+## Workflow update
+
+Основной `update` выполняет такие этапы:
+
+1. Берёт lock и читает state.
+2. Валидирует repo и определяет `target_commit`.
+3. Проверяет наличие `src/cf` и `src/cfe`.
+4. Готовит `staging/build`.
+5. Генерирует `parser-config.json` и запускает parser.
+6. Валидирует `Report.txt`.
+7. Подготавливает `code/cf` и `code/cfe`.
+8. Поднимает build container.
+9. Выполняет build infrastructure smoke-test.
+10. Выполняет build MCP tool smoke-test, если он включён.
+11. Переключает `build -> current`.
+12. Поднимает production container.
+13. Выполняет production smoke-test.
+14. При ошибке production smoke-test запускает automatic rollback.
+15. Обновляет state и отправляет notifications.
+
+## Workflow rollback
+
+`--rollback` выполняет manual rollback:
+
+- меняет местами `staging/current` и `staging/previous`
+- меняет местами `chroma/current` и `chroma/previous`
+- поднимает production container на `previous`
+- прогоняет production smoke-test
+- обновляет `current_commit` и `previous_commit`
+
+## Структура конфигурации
+
+`project.json` должен содержать как минимум такие блоки:
+
+- `project`
+- `repo`
+- `sources`
+- `parser`
+- `mcp`
+- `paths`
+- `smokeTest`
+- `notifications`
+- `retention`
+- `rollback`
+
+Ключевые поля:
+
+- `repo.path`, `repo.branch`, `repo.remote`
+- `sources.mainConfigPath`, `sources.extensionPath`
+- `parser.toolPath`
+- `mcp.production.*` и `mcp.build.*`
+- `mcp.secretEnv`
+- `paths.stagingRoot`, `paths.chromaRoot`, `paths.stateRoot`, `paths.logsRoot`
+- `smokeTest.infrastructure.*`
+- `smokeTest.toolSmokeTest.*`
+- `notifications.webhookUrlEnv`
+
+Ограничения, которые уже валидируются:
+
+- production и build container names должны отличаться
+- production и build ports должны отличаться
+- `smokeTest.profile` должен быть `dev` или `production`
+- при `smokeTest.profile=production` нельзя выключать `toolSmokeTest.enabled`
+
+Пример структуры можно посмотреть в тестах: [tests/test_cli.py](./tests/test_cli.py)
+
+## Exit codes
+
+Основные коды возврата:
+
+- `0` — success
+- `1` — success with warnings
+- `2` — config error
+- `5` — git pull failed
+- `9` — parser failed
+- `10` — report validation failed
+- `11` — docker unavailable
+- `13` — build smoke failed
+- `14` — production switch failed
+- `15` — production smoke failed
+- `16` — rollback failed
+- `20` — notification failed
+
+Полный список находится в [mcp_project_updater/constants.py](./mcp_project_updater/constants.py).
+
+## Тесты
+
+```powershell
+pytest -q
+```
+
+На текущем состоянии репозитория тестовый набор зелёный.
+
+## Документация
+
+- [prd-mcp-project-updater.md](./prd-mcp-project-updater.md)
+- [dev-spec-mcp-project-updater.md](./dev-spec-mcp-project-updater.md)
+- [implementation-plan-mcp-project-updater.md](./implementation-plan-mcp-project-updater.md)

@@ -1,9 +1,33 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+from mcp_project_updater.config import RepoAuthConfig, RepoConfig
 from mcp_project_updater.constants import ExitCode
-from mcp_project_updater.git_ops import CommandResult, GitOperationError, determine_target_commit, validate_repo
+from mcp_project_updater.git_ops import (
+    CommandResult,
+    GitOperationError,
+    determine_target_commit,
+    ensure_repo_available,
+    validate_repo,
+)
+
+
+def _repo(path: Path) -> RepoConfig:
+    return RepoConfig(
+        path=path,
+        branch="master",
+        remote="origin",
+        pull_mode="ff-only",
+        clone_url="https://gitlab.example.com/team/orders.git",
+        auth=RepoAuthConfig(
+            type="none",
+            token_env=None,
+            username="oauth2",
+        ),
+    )
 
 
 def test_validate_repo_without_changes() -> None:
@@ -15,7 +39,7 @@ def test_validate_repo_without_changes() -> None:
             return CommandResult(0, "true\n", "")
         return CommandResult(0, "", "")
 
-    result = validate_repo(cwd := __import__("pathlib").Path("."), runner)
+    result = validate_repo(cwd := Path("."), runner)
 
     assert result.inside_work_tree is True
     assert result.tracked_changes == []
@@ -30,7 +54,7 @@ def test_validate_repo_with_tracked_changes_raises() -> None:
         return CommandResult(0, " M tracked.txt\n", "")
 
     with pytest.raises(GitOperationError) as exc:
-        validate_repo(__import__("pathlib").Path("."), runner)
+        validate_repo(Path("."), runner)
 
     assert exc.value.exit_code == ExitCode.GIT_TRACKED_CHANGES
 
@@ -41,22 +65,48 @@ def test_validate_repo_collects_untracked_changes() -> None:
             return CommandResult(0, "true\n", "")
         return CommandResult(0, "?? new.txt\n", "")
 
-    result = validate_repo(__import__("pathlib").Path("."), runner)
+    result = validate_repo(Path("."), runner)
 
     assert result.untracked_changes == ["?? new.txt"]
 
 
+def test_ensure_repo_available_clones_missing_repo(tmp_path: Path) -> None:
+    calls = []
+    repo = _repo(tmp_path / "repo")
+
+    def runner(command, cwd):
+        calls.append((command, cwd))
+        return CommandResult(0, "", "")
+
+    ensure_repo_available(repo, no_git_pull=False, runner=runner)
+
+    assert calls == [
+        (
+            ["git", "clone", "--branch", "master", "--single-branch", "https://gitlab.example.com/team/orders.git", str(repo.path)],
+            repo.path.parent,
+        )
+    ]
+
+
+def test_ensure_repo_available_rejects_missing_repo_with_no_git_pull(tmp_path: Path) -> None:
+    repo = _repo(tmp_path / "repo")
+
+    with pytest.raises(GitOperationError) as exc:
+        ensure_repo_available(repo, no_git_pull=True, runner=lambda command, cwd: CommandResult(0, "", ""))
+
+    assert exc.value.exit_code == ExitCode.GIT_REPOSITORY_NOT_FOUND
+
+
 def test_determine_target_commit_with_no_git_pull() -> None:
     calls = []
+    repo = _repo(Path("."))
 
     def runner(command, cwd):
         calls.append(command)
         return CommandResult(0, "abc123\n", "")
 
     commit = determine_target_commit(
-        __import__("pathlib").Path("."),
-        "master",
-        "origin",
+        repo,
         no_git_pull=True,
         runner=runner,
     )
@@ -67,6 +117,7 @@ def test_determine_target_commit_with_no_git_pull() -> None:
 
 def test_determine_target_commit_with_git_pull_flow() -> None:
     calls = []
+    repo = _repo(Path("."))
 
     def runner(command, cwd):
         calls.append(command)
@@ -75,9 +126,7 @@ def test_determine_target_commit_with_git_pull_flow() -> None:
         return CommandResult(0, "", "")
 
     commit = determine_target_commit(
-        __import__("pathlib").Path("."),
-        "master",
-        "origin",
+        repo,
         no_git_pull=False,
         runner=runner,
     )
@@ -89,3 +138,55 @@ def test_determine_target_commit_with_git_pull_flow() -> None:
         ["git", "pull", "--ff-only", "origin", "master"],
         ["git", "rev-parse", "origin/master"],
     ]
+
+
+def test_gitlab_token_auth_is_applied_to_clone_and_fetch(tmp_path: Path) -> None:
+    calls = []
+    repo = RepoConfig(
+        path=tmp_path / "repo",
+        branch="master",
+        remote="origin",
+        pull_mode="ff-only",
+        clone_url="https://gitlab.example.com/team/orders.git",
+        auth=RepoAuthConfig(
+            type="gitlab-token",
+            token_env="GITLAB_TOKEN",
+            username="oauth2",
+        ),
+    )
+
+    def runner(command, cwd):
+        calls.append(command)
+        if command[-2:] == ["rev-parse", "origin/master"]:
+            return CommandResult(0, "fedcba\n", "")
+        if command[-2:] == ["rev-parse", "HEAD"]:
+            return CommandResult(0, "fedcba\n", "")
+        return CommandResult(0, "", "")
+
+    ensure_repo_available(
+        repo,
+        no_git_pull=False,
+        runner=runner,
+        env={"GITLAB_TOKEN": "token-value"},
+    )
+    determine_target_commit(
+        RepoConfig(
+            path=Path("."),
+            branch=repo.branch,
+            remote=repo.remote,
+            pull_mode=repo.pull_mode,
+            clone_url=repo.clone_url,
+            auth=repo.auth,
+        ),
+        no_git_pull=False,
+        runner=runner,
+        env={"GITLAB_TOKEN": "token-value"},
+    )
+
+    assert calls[0][:3] == ["git", "-c", calls[0][2]]
+    assert calls[0][3:7] == ["clone", "--branch", "master", "--single-branch"]
+    assert "http.extraHeader=AUTHORIZATION: Basic " in calls[0][2]
+    assert calls[1][:3] == ["git", "-c", calls[1][2]]
+    assert calls[1][3:] == ["fetch", "origin", "master"]
+    assert calls[3][:3] == ["git", "-c", calls[3][2]]
+    assert calls[3][3:] == ["pull", "--ff-only", "origin", "master"]

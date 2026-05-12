@@ -9,7 +9,7 @@ from typing import Sequence
 from .config import ProjectConfig, load_project_config
 from .constants import ExitCode
 from .docker_ops import default_docker_runner, ensure_docker_available, write_container_logs
-from .git_ops import determine_target_commit, validate_repo
+from .git_ops import determine_target_commit, ensure_repo_available, validate_repo
 from .lock import LockManager
 from .mcp_container import start_build_container
 from .notifications import NotificationPayload, cleanup_old_logs, send_notification
@@ -103,6 +103,12 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
                 last_indexed_commit_at_start=last_indexed_commit_at_start,
             )
 
+        stage = "git_prepare"
+        ensure_repo_available(
+            config.repo,
+            no_git_pull=options.no_git_pull,
+        )
+
         stage = "git_validation"
         repo_validation = validate_repo(config.repo.path)
         if repo_validation.untracked_changes:
@@ -110,9 +116,7 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
 
         stage = "git_target_commit"
         target_commit = determine_target_commit(
-            config.repo.path,
-            config.repo.branch,
-            config.repo.remote,
+            config.repo,
             no_git_pull=options.no_git_pull,
         )
         state_snapshot = state_store.read_snapshot()

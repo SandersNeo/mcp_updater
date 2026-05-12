@@ -61,3 +61,10 @@
 - [x] Добавить unit tests
 - [x] Добавить integration-style tests с mock command runners
 - [x] Обновить план по факту реализации
+
+## Phase 9. GitLab Source Support
+
+- [x] Добавить `repo.cloneUrl` и `repo.auth.*` в конфиг
+- [x] Реализовать `clone if missing` для локального mirror в `repo.path`
+- [x] Реализовать authenticated GitLab `clone/fetch/pull` через `tokenEnv`
+- [x] Обновить документацию и пример конфига

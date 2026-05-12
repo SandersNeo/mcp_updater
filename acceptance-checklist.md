@@ -7,6 +7,8 @@
 - Убедиться, что Python `3.11+`, `git` и `docker` доступны в `PATH`
 - Проверить, что parser tool существует по пути из `parser.toolPath`
 - Проверить, что Git repo по `repo.path` существует и содержит ожидаемые исходники
+- если `repo.path` ещё не существует, проверить корректность `repo.cloneUrl`
+- если используется GitLab token auth, проверить наличие env из `repo.auth.tokenEnv`
 - Проверить, что `mcp.production.containerName` и `mcp.build.containerName` уникальны
 - Проверить, что `mcp.production.hostPort` и `mcp.build.hostPort` не конфликтуют
 - Проверить, что каталогам `stagingRoot`, `chromaRoot`, `stateRoot`, `logsRoot` можно писать
@@ -18,6 +20,7 @@
 - Создать рабочий `project.json` на основе [project.example.json](./project.example.json)
 - Для первого прогона выставить корректные:
   - `repo.path`
+  - `repo.cloneUrl`
   - `parser.toolPath`
   - `mcp.image`
   - `mcp.production.url`
@@ -38,6 +41,7 @@ python .\update_mcp_project.py --config .\project.json --dry-run --verbose
 - команда завершилась с `exit code 0`
 - config загрузился без validation errors
 - корректно определились `target_commit`, `last_indexed_commit`, `current_commit`, `previous_commit`
+- если repo раньше отсутствовал, локальный mirror был создан в `repo.path`
 - source detection нашёл ожидаемые `src/cf` и, при наличии, `src/cfe`
 - build и production URL в логе соответствуют реальной среде
 

@@ -1,10 +1,16 @@
 {
   "project": "orders",
   "repo": {
-    "path": "C:/work/orders-repo",
+    "path": "C:/mcp-updater-data/repos/orders",
     "branch": "master",
     "remote": "origin",
-    "pullMode": "ff-only"
+    "pullMode": "ff-only",
+    "cloneUrl": "https://gitlab.example.com/team/orders.git",
+    "auth": {
+      "type": "gitlab-token",
+      "tokenEnv": "GITLAB_TOKEN",
+      "username": "oauth2"
+    }
   },
   "sources": {
     "mainConfigPath": "src/cf",

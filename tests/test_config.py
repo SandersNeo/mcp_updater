@@ -9,9 +9,10 @@ from mcp_project_updater.config import load_project_config
 from mcp_project_updater.errors import ConfigValidationError
 
 
-def _write_config(tmp_path: Path, payload: dict) -> Path:
+def _write_config(tmp_path: Path, payload: dict, *, create_repo: bool = True) -> Path:
     repo_path = tmp_path / "repo"
-    repo_path.mkdir()
+    if create_repo:
+        repo_path.mkdir()
 
     parser_path = tmp_path / "generate_config_report.py"
     parser_path.write_text("print('ok')\n", encoding="utf-8")
@@ -38,6 +39,12 @@ def _base_payload() -> dict:
             "branch": "master",
             "remote": "origin",
             "pullMode": "ff-only",
+            "cloneUrl": None,
+            "auth": {
+                "type": "none",
+                "tokenEnv": None,
+                "username": "oauth2",
+            },
         },
         "sources": {
             "mainConfigPath": "src/cf",
@@ -176,3 +183,26 @@ def test_rollback_preserve_failed_index_defaults_to_true(tmp_path: Path) -> None
     config = load_project_config(config_path)
 
     assert config.rollback.preserve_failed_index is True
+
+
+def test_missing_repo_path_is_allowed_when_clone_url_is_configured(tmp_path: Path) -> None:
+    payload = _base_payload()
+    payload["repo"]["cloneUrl"] = "https://gitlab.example.com/team/orders.git"
+    config_path = _write_config(tmp_path, payload, create_repo=False)
+
+    config = load_project_config(config_path)
+
+    assert config.repo.clone_url == "https://gitlab.example.com/team/orders.git"
+    assert config.repo.path.exists() is False
+
+
+def test_gitlab_token_auth_requires_token_env(tmp_path: Path) -> None:
+    payload = _base_payload()
+    payload["repo"]["auth"] = {
+        "type": "gitlab-token",
+        "username": "oauth2",
+    }
+    config_path = _write_config(tmp_path, payload)
+
+    with pytest.raises(ConfigValidationError):
+        load_project_config(config_path)

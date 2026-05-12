@@ -207,7 +207,7 @@ def _mock_phase2_dependencies(
     )
     monkeypatch.setattr(
         "mcp_project_updater.cli.determine_target_commit",
-        lambda repo_path, branch, remote, no_git_pull: commit,
+        lambda repo, no_git_pull: commit,
     )
     if create_report:
         def _fake_run_parser(parser_config, parser_config_path, *, verbose, working_directory):

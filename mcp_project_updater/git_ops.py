@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import base64
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
+from .config import RepoAuthConfig, RepoConfig
 from .constants import ExitCode
 from .errors import UpdaterError
 
@@ -45,6 +48,45 @@ class RepoValidationResult:
     untracked_changes: list[str]
 
 
+def ensure_repo_available(
+    repo: RepoConfig,
+    *,
+    no_git_pull: bool,
+    runner: CommandRunner = default_command_runner,
+    env: dict[str, str] | None = None,
+) -> None:
+    if repo.path.exists():
+        return
+
+    if no_git_pull:
+        raise GitOperationError(
+            f"Repository path does not exist and '--no-git-pull' forbids cloning: {repo.path}",
+            ExitCode.GIT_REPOSITORY_NOT_FOUND,
+        )
+
+    if not repo.clone_url:
+        raise GitOperationError(
+            f"Repository path does not exist and no clone URL is configured: {repo.path}",
+            ExitCode.GIT_REPOSITORY_NOT_FOUND,
+        )
+
+    repo.path.parent.mkdir(parents=True, exist_ok=True)
+    command = _with_auth_options(
+        [
+            "git",
+            "clone",
+            "--branch",
+            repo.branch,
+            "--single-branch",
+            repo.clone_url,
+            str(repo.path),
+        ],
+        repo.auth,
+        env=env,
+    )
+    _run_git(repo.path.parent, command, runner, ExitCode.GIT_PULL_FAILED)
+
+
 def validate_repo(repo_path: Path, runner: CommandRunner = default_command_runner) -> RepoValidationResult:
     inside = _run_git(repo_path, ["git", "rev-parse", "--is-inside-work-tree"], runner, ExitCode.GIT_REPOSITORY_NOT_FOUND)
     if inside.stdout.strip().lower() != "true":
@@ -74,22 +116,68 @@ def validate_repo(repo_path: Path, runner: CommandRunner = default_command_runne
 
 
 def determine_target_commit(
-    repo_path: Path,
-    branch: str,
-    remote: str,
+    repo: RepoConfig,
     *,
     no_git_pull: bool,
     runner: CommandRunner = default_command_runner,
+    env: dict[str, str] | None = None,
 ) -> str:
     if no_git_pull:
-        result = _run_git(repo_path, ["git", "rev-parse", "HEAD"], runner, ExitCode.GIT_PULL_FAILED)
+        result = _run_git(repo.path, ["git", "rev-parse", "HEAD"], runner, ExitCode.GIT_PULL_FAILED)
         return result.stdout.strip()
 
-    _run_git(repo_path, ["git", "fetch", remote, branch], runner, ExitCode.GIT_PULL_FAILED)
-    _run_git(repo_path, ["git", "checkout", branch], runner, ExitCode.GIT_PULL_FAILED)
-    _run_git(repo_path, ["git", "pull", "--ff-only", remote, branch], runner, ExitCode.GIT_PULL_FAILED)
-    result = _run_git(repo_path, ["git", "rev-parse", f"{remote}/{branch}"], runner, ExitCode.GIT_PULL_FAILED)
+    fetch_command = _with_auth_options(
+        ["git", "fetch", repo.remote, repo.branch],
+        repo.auth,
+        env=env,
+    )
+    _run_git(repo.path, fetch_command, runner, ExitCode.GIT_PULL_FAILED)
+    _run_git(repo.path, ["git", "checkout", repo.branch], runner, ExitCode.GIT_PULL_FAILED)
+
+    pull_command = _with_auth_options(
+        ["git", "pull", _render_pull_mode_flag(repo.pull_mode), repo.remote, repo.branch],
+        repo.auth,
+        env=env,
+    )
+    _run_git(repo.path, pull_command, runner, ExitCode.GIT_PULL_FAILED)
+    result = _run_git(repo.path, ["git", "rev-parse", f"{repo.remote}/{repo.branch}"], runner, ExitCode.GIT_PULL_FAILED)
     return result.stdout.strip()
+
+
+def _render_pull_mode_flag(pull_mode: str) -> str:
+    return pull_mode if pull_mode.startswith("--") else f"--{pull_mode}"
+
+
+def _with_auth_options(
+    command: Sequence[str],
+    auth: RepoAuthConfig,
+    *,
+    env: dict[str, str] | None,
+) -> list[str]:
+    header_value = _build_auth_header(auth, env=env)
+    if header_value is None:
+        return list(command)
+    return ["git", "-c", f"http.extraHeader={header_value}", *list(command)[1:]]
+
+
+def _build_auth_header(auth: RepoAuthConfig, *, env: dict[str, str] | None) -> str | None:
+    if auth.type == "none":
+        return None
+    if auth.type != "gitlab-token":
+        raise GitOperationError(f"Unsupported repo auth type: {auth.type}", ExitCode.GIT_PULL_FAILED)
+
+    token_env = auth.token_env or ""
+    env_map = env or os.environ
+    token = env_map.get(token_env)
+    if not token:
+        raise GitOperationError(
+            f"Required Git token environment variable is missing: {token_env}",
+            ExitCode.GIT_PULL_FAILED,
+        )
+
+    username = auth.username or "oauth2"
+    basic_value = base64.b64encode(f"{username}:{token}".encode("utf-8")).decode("ascii")
+    return f"AUTHORIZATION: Basic {basic_value}"
 
 
 def _run_git(repo_path: Path, command: Sequence[str], runner: CommandRunner, error_code: int) -> CommandResult:

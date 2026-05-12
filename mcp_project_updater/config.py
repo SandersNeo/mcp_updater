@@ -43,12 +43,30 @@ def _expect_path_string(value: Any, field_name: str) -> Path:
     return Path(_expect_string(value, field_name))
 
 
+def _expect_optional_string(value: Any, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ConfigValidationError(f"Field '{field_name}' must be a string when provided.")
+    stripped = value.strip()
+    return stripped or None
+
+
+@dataclass(slots=True)
+class RepoAuthConfig:
+    type: str
+    token_env: str | None
+    username: str | None
+
+
 @dataclass(slots=True)
 class RepoConfig:
     path: Path
     branch: str
     remote: str
     pull_mode: str
+    clone_url: str | None
+    auth: RepoAuthConfig
 
 
 @dataclass(slots=True)
@@ -217,6 +235,18 @@ def _parse_project_config(raw: dict[str, Any], config_path: Path) -> ProjectConf
             branch=_expect_string(repo_raw.get("branch"), "repo.branch"),
             remote=_expect_string(repo_raw.get("remote"), "repo.remote"),
             pull_mode=_expect_string(repo_raw.get("pullMode"), "repo.pullMode"),
+            clone_url=_expect_optional_string(repo_raw.get("cloneUrl"), "repo.cloneUrl"),
+            auth=RepoAuthConfig(
+                type=_expect_string(_expect_mapping(repo_raw.get("auth", {}), "repo.auth").get("type", "none"), "repo.auth.type"),
+                token_env=_expect_optional_string(
+                    _expect_mapping(repo_raw.get("auth", {}), "repo.auth").get("tokenEnv"),
+                    "repo.auth.tokenEnv",
+                ),
+                username=_expect_optional_string(
+                    _expect_mapping(repo_raw.get("auth", {}), "repo.auth").get("username", "oauth2"),
+                    "repo.auth.username",
+                ),
+            ),
         ),
         sources=SourcesConfig(
             main_config_path=_expect_string(sources_raw.get("mainConfigPath"), "sources.mainConfigPath"),
@@ -330,11 +360,19 @@ def _parse_project_config(raw: dict[str, Any], config_path: Path) -> ProjectConf
 
 
 def _validate_project_config(config: ProjectConfig) -> None:
-    if not config.repo.path.exists():
-        raise ConfigValidationError(f"Repository path does not exist: {config.repo.path}")
-
     if not config.parser.tool_path.exists():
         raise ConfigValidationError(f"Parser tool path does not exist: {config.parser.tool_path}")
+
+    if not config.repo.path.exists() and not config.repo.clone_url:
+        raise ConfigValidationError(
+            "Repository path does not exist and 'repo.cloneUrl' is not configured."
+        )
+
+    if config.repo.auth.type not in {"none", "gitlab-token"}:
+        raise ConfigValidationError("Field 'repo.auth.type' must be either 'none' or 'gitlab-token'.")
+
+    if config.repo.auth.type == "gitlab-token" and not config.repo.auth.token_env:
+        raise ConfigValidationError("Field 'repo.auth.tokenEnv' must be set when repo.auth.type='gitlab-token'.")
 
     required_paths = {
         "paths.stagingRoot": config.paths.staging_root,

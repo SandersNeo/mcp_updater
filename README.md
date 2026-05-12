@@ -32,6 +32,7 @@
 - Git
 - внешний parser tool, путь к которому указывается в `project.json`
 - секреты из `mcp.secretEnv` должны быть доступны в переменных окружения
+- если репозиторий берётся из GitLab по HTTPS, должен быть доступен token из `repo.auth.tokenEnv`
 
 ## Установка
 
@@ -68,6 +69,36 @@ PowerShell wrapper:
 
 ```powershell
 .\update-mcp-project.ps1 -ConfigPath .\project.json
+```
+
+## GitLab Source Model
+
+Updater работает не через GitLab API, а через обычный `git clone / fetch / pull`.
+
+Это значит:
+
+- `repo.path` — локальный mirror-каталог, с которым дальше работает updater
+- если `repo.path` уже существует, updater обновляет его через `fetch/pull`
+- если `repo.path` ещё не существует, updater клонирует репозиторий из `repo.cloneUrl`
+- для GitLab over HTTPS можно задать `repo.auth.type=gitlab-token` и `repo.auth.tokenEnv`
+
+Минимальная схема для GitLab:
+
+```json
+{
+  "repo": {
+    "path": "C:/mcp-updater-data/repos/orders",
+    "branch": "master",
+    "remote": "origin",
+    "pullMode": "ff-only",
+    "cloneUrl": "https://gitlab.example.com/team/orders.git",
+    "auth": {
+      "type": "gitlab-token",
+      "tokenEnv": "GITLAB_TOKEN",
+      "username": "oauth2"
+    }
+  }
+}
 ```
 
 ## MCP Smoke Test
@@ -134,6 +165,8 @@ python .\mcp_smoke_test.py --config .\project.json
 Ключевые поля:
 
 - `repo.path`, `repo.branch`, `repo.remote`
+- `repo.cloneUrl`
+- `repo.auth.type`, `repo.auth.tokenEnv`, `repo.auth.username`
 - `sources.mainConfigPath`, `sources.extensionPath`
 - `parser.toolPath`
 - `mcp.production.*` и `mcp.build.*`
@@ -149,6 +182,9 @@ python .\mcp_smoke_test.py --config .\project.json
 - production и build ports должны отличаться
 - `smokeTest.profile` должен быть `dev` или `production`
 - при `smokeTest.profile=production` нельзя выключать `toolSmokeTest.enabled`
+- если `repo.path` ещё не существует, должен быть задан `repo.cloneUrl`
+- `repo.auth.type` должен быть `none` или `gitlab-token`
+- при `repo.auth.type=gitlab-token` должен быть задан `repo.auth.tokenEnv`
 
 Готовый шаблон конфига: [project.example.json](./project.example.json)
 

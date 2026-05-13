@@ -62,7 +62,7 @@ python .\update_mcp_project.py --config .\project.json --verbose
 - report validation прошла успешно
 - build container поднялся
 - build infrastructure smoke-test прошёл
-- build MCP tool smoke-test прошёл
+- build MCP tool smoke-test прошёл по `mcp.build.url`
 
 ## 5. Production Switch Validation
 
@@ -71,7 +71,8 @@ python .\update_mcp_project.py --config .\project.json --verbose
 - `staging/current` содержит новый metadata/code
 - `chroma/current` содержит новый индекс
 - production container поднят на новом `current`
-- production smoke-test прошёл по `mcp.production.url`
+- production infrastructure smoke-test прошёл
+- production MCP tool smoke-test прошёл по `mcp.production.url`, если `toolSmokeTest.enabled=true`
 - `state/current_commit` обновился до нового commit
 - `state/last_indexed_commit` обновился до нового commit
 - `state/previous_commit` содержит предыдущий production commit, если он был
@@ -131,8 +132,9 @@ python .\update_mcp_project.py --config .\project.json --rollback --verbose
 
 - `current` и `previous` поменялись местами
 - production container стартовал на rollback-состоянии
-- production smoke-test после rollback прошёл
+- production smoke-test после rollback прошёл по `mcp.production.url`
 - `state/current_commit` и `state/previous_commit` поменялись местами
+- `state/last_indexed_commit` не изменился автоматически
 
 ## 10. Failure and Automatic Rollback Drill
 
@@ -157,6 +159,7 @@ python .\update_mcp_project.py --config .\project.json --rollback --verbose
 
 - `0` — успешный update
 - `1` — update успешен, но `onSuccess` notification не отправилась
+- `1` — manual rollback успешен, но rollback notification не отправилась
 - `2` — сломан `project.json`
 - `11` — Docker недоступен
 - `15` — production smoke-test failed

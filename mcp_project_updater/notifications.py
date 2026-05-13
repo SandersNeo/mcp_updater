@@ -10,13 +10,10 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from .config import NotificationsConfig
-from .constants import ExitCode
-from .errors import UpdaterError
 
 
-class NotificationError(UpdaterError):
-    def __init__(self, message: str) -> None:
-        super().__init__(message, ExitCode.NOTIFICATION_FAILED)
+class NotificationError(Exception):
+    pass
 
 
 @dataclass(slots=True)

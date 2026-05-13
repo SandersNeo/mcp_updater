@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from mcp_project_updater.constants import ExitCode
 from mcp_project_updater.notifications import NotificationError, NotificationPayload, cleanup_old_logs, send_notification
 from mcp_project_updater.config import NotificationsConfig
 
@@ -49,14 +48,12 @@ def test_send_notification_success() -> None:
 
 
 def test_send_notification_missing_env_raises() -> None:
-    with pytest.raises(NotificationError) as exc:
+    with pytest.raises(NotificationError):
         send_notification(
             _notifications_config(),
             NotificationPayload("orders", "failed", "parser", "abc", "def", True, False, None, "log"),
             env={},
         )
-
-    assert exc.value.exit_code == ExitCode.NOTIFICATION_FAILED
 
 
 def test_cleanup_old_logs(tmp_path: Path) -> None:

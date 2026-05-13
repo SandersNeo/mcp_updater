@@ -130,10 +130,13 @@ python .\mcp_smoke_test.py --config .\project.json
 7. Подготавливает `code/cf` и `code/cfe`.
 8. Поднимает build container.
 9. Выполняет build infrastructure smoke-test.
-10. Выполняет build MCP tool smoke-test, если он включён.
+10. Выполняет build MCP tool smoke-test по `mcp.build.url`, если он включён.
 11. Переключает `build -> current`.
 12. Поднимает production container.
-13. Выполняет production smoke-test.
+13. Выполняет production smoke-test:
+    production infrastructure smoke-test
+    +
+    production MCP tool smoke-test по `mcp.production.url`, если `smokeTest.toolSmokeTest.enabled=true`
 14. При ошибке production smoke-test запускает automatic rollback.
 15. Обновляет state и отправляет notifications.
 
@@ -144,8 +147,9 @@ python .\mcp_smoke_test.py --config .\project.json
 - меняет местами `staging/current` и `staging/previous`
 - меняет местами `chroma/current` и `chroma/previous`
 - поднимает production container на `previous`
-- прогоняет production smoke-test
+- прогоняет production smoke-test: infrastructure + tool smoke по `mcp.production.url`, если tool smoke включён
 - обновляет `current_commit` и `previous_commit`
+- не переписывает `last_indexed_commit` автоматически
 
 ## Структура конфигурации
 
@@ -203,9 +207,15 @@ python .\mcp_smoke_test.py --config .\project.json
 - `14` — production switch failed
 - `15` — production smoke failed
 - `16` — rollback failed
-- `20` — notification failed
 
 Полный список находится в [mcp_project_updater/constants.py](./mcp_project_updater/constants.py).
+
+Семантика notifications в основном workflow:
+
+- `update success + notification failed` -> `1`
+- `manual rollback success + notification failed` -> `1`
+- `update failed + notification failed` -> сохраняется исходный код ошибки update
+- `rollback failed + notification failed` -> сохраняется исходный код rollback
 
 ## Тесты
 

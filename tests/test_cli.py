@@ -5,6 +5,7 @@ from pathlib import Path
 
 from mcp_project_updater.cli import main, parse_args
 from mcp_project_updater.constants import ExitCode
+from mcp_project_updater.errors import UpdaterError
 from mcp_project_updater.git_ops import RepoValidationResult
 
 
@@ -187,6 +188,23 @@ def test_main_returns_warning_when_success_notification_fails(tmp_path: Path, mo
     result = main(["--config", str(config_path)])
 
     assert result == ExitCode.SUCCESS_WITH_WARNINGS
+
+
+def test_main_preserves_update_error_when_failure_notification_fails(tmp_path: Path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    _mock_phase2_dependencies(monkeypatch)
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.run_parser",
+        lambda *args, **kwargs: (_ for _ in ()).throw(UpdaterError("parser failed", ExitCode.PARSER_FAILED)),
+    )
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.send_notification",
+        lambda *args, **kwargs: (_ for _ in ()).throw(Exception("boom")),
+    )
+
+    result = main(["--config", str(config_path)])
+
+    assert result == ExitCode.PARSER_FAILED
 
 
 def _mock_phase2_dependencies(

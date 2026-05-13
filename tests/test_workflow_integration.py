@@ -116,6 +116,46 @@ def test_run_rollback_integration_swaps_current_and_previous(tmp_path: Path, mon
     assert (config.paths.logs_root / "integration-mcp-production.log").exists()
 
 
+def test_run_rollback_returns_warning_when_notification_fails(tmp_path: Path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    config = load_project_config(config_path)
+    state_store = StateStore(config.paths.state_root)
+    log_path = config.paths.logs_root / "integration-update.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("", encoding="utf-8")
+
+    monkeypatch.setenv("ONERPA_LICENSE_KEY", "secret-value")
+    monkeypatch.setattr("mcp_project_updater.cli.default_docker_runner", FakeDockerRunner())
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.run_production_smoke_test",
+        lambda current_config, *, docker_runner: object(),
+    )
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.send_notification",
+        lambda *args, **kwargs: (_ for _ in ()).throw(Exception("boom")),
+    )
+
+    _create_artifact_tree(config.paths.staging_root / "current", marker="current-version")
+    _create_artifact_tree(config.paths.staging_root / "previous", marker="previous-version")
+    _create_artifact_tree(config.paths.chroma_root / "current", marker="current-chroma")
+    _create_artifact_tree(config.paths.chroma_root / "previous", marker="previous-chroma")
+    state_store.write_current_commit("commit-current")
+    state_store.write_previous_commit("commit-previous")
+    state_store.write_last_indexed_commit("indexed-commit")
+
+    result = run_rollback(
+        config,
+        state_store,
+        log_path=log_path,
+        last_indexed_commit_at_start="indexed-commit",
+    )
+
+    assert result == ExitCode.SUCCESS_WITH_WARNINGS
+    assert state_store.read_current_commit() == "commit-previous"
+    assert state_store.read_previous_commit() == "commit-current"
+    assert state_store.read_last_indexed_commit() == "indexed-commit"
+
+
 def _write_config(tmp_path: Path) -> Path:
     repo_path = tmp_path / "repo"
     (repo_path / "src" / "cf").mkdir(parents=True)

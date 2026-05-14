@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import http.client
+import itertools
 from pathlib import Path
 
 import pytest
@@ -37,7 +38,7 @@ def test_run_infrastructure_smoke_test_success(tmp_path: Path) -> None:
         commands.append(command)
         if command[:2] == ["docker", "inspect"]:
             return DockerCommandResult(0, '[{"State":{"Status":"running","Restarting":false}}]', "")
-        return DockerCommandResult(0, "clean logs", "")
+        return DockerCommandResult(0, "Started successfully", "")
 
     result = run_infrastructure_smoke_test(
         _smoke_config(),
@@ -111,3 +112,38 @@ def test_run_infrastructure_smoke_test_handles_remote_disconnect_as_retryable_fa
         )
 
     assert "HTTP readiness check failed" in str(exc.value)
+
+
+def test_run_infrastructure_smoke_test_waits_for_ready_log_pattern(tmp_path: Path) -> None:
+    chroma = tmp_path / "chroma"
+    chroma.mkdir()
+    (chroma / "file.bin").write_text("x", encoding="utf-8")
+
+    log_responses = ["still starting", "Started successfully"]
+    log_index = {"value": 0}
+
+    def runner(command, cwd):
+        if command[:2] == ["docker", "inspect"]:
+            return DockerCommandResult(0, '[{"State":{"Status":"running","Restarting":false}}]', "")
+        response = log_responses[min(log_index["value"], len(log_responses) - 1)]
+        log_index["value"] += 1
+        return DockerCommandResult(0, response, "")
+
+    ticks = itertools.count(step=0.1)
+
+    result = run_infrastructure_smoke_test(
+        _smoke_config(),
+        InfrastructureSmokeContext(
+            container_name="build",
+            host_port=18100,
+            url="http://localhost:18100/mcp",
+            chroma_path=chroma,
+        ),
+        runner=runner,
+        http_status_getter=lambda url: 405,
+        port_checker=lambda host, port: True,
+        monotonic=lambda: next(ticks),
+        sleep=lambda seconds: None,
+    )
+
+    assert result.http_status_code == 405

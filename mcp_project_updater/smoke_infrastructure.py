@@ -112,6 +112,12 @@ def run_infrastructure_smoke_test(
             if pattern and pattern.lower() in logs_text.lower():
                 raise InfrastructureSmokeError(f"Docker logs contain error pattern: {pattern}")
 
+        if smoke_config.log_ready_patterns:
+            if not any(pattern and pattern.lower() in logs_text.lower() for pattern in smoke_config.log_ready_patterns):
+                last_failure = "Docker logs do not contain any ready pattern yet."
+                sleep(smoke_config.check_interval_seconds)
+                continue
+
         return InfrastructureSmokeResult(
             http_status_code=http_status,
             logs_checked=True,

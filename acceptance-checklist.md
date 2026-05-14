@@ -14,6 +14,7 @@
 - Проверить, что каталогам `stagingRoot`, `chromaRoot`, `stateRoot`, `logsRoot` можно писать
 - Проверить, что все env из `mcp.secretEnv` экспортированы в окружение
 - Если включены notifications, проверить наличие env из `notifications.webhookUrlEnv`
+- Если `notifications.webhookUrlEnv = MCP_UPDATE_WEBHOOK_URL`, проверить, что `MCP_UPDATE_WEBHOOK_URL` содержит реальный webhook URL, а не пустое значение
 
 ## 2. Config Sanity
 
@@ -86,6 +87,9 @@ python .\update_mcp_project.py --config .\project.json --verbose
 - в `logsRoot` появился production container log
 - в логах нет значений из secret env
 - при включённых notifications webhook получил expected payload
+- webhook берётся именно из env-переменной, указанной в `notifications.webhookUrlEnv`
+- если используется `MCP_UPDATE_WEBHOOK_URL`, она задана в окружении того процесса, который запускает updater
+- payload содержит как минимум `project`, `status`, `stage`, `targetCommit`, `lastIndexedCommit`, `logPath`
 
 ## 7. No-Change Scenario
 

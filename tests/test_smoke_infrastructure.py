@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.client
 from pathlib import Path
 
 import pytest
@@ -80,3 +81,34 @@ def test_run_infrastructure_smoke_test_detects_error_pattern(tmp_path: Path) -> 
             port_checker=lambda host, port: True,
             sleep=lambda seconds: None,
         )
+
+
+def test_run_infrastructure_smoke_test_handles_remote_disconnect_as_retryable_failure(tmp_path: Path) -> None:
+    chroma = tmp_path / "chroma"
+    chroma.mkdir()
+    (chroma / "file.bin").write_text("x", encoding="utf-8")
+
+    def runner(command, cwd):
+        if command[:2] == ["docker", "inspect"]:
+            return DockerCommandResult(0, '[{"State":{"Status":"running","Restarting":false}}]', "")
+        return DockerCommandResult(0, "clean logs", "")
+
+    ticks = iter([0.0, 0.5, 1.0, 2.1])
+
+    with pytest.raises(InfrastructureSmokeError) as exc:
+        run_infrastructure_smoke_test(
+            _smoke_config(),
+            InfrastructureSmokeContext(
+                container_name="build",
+                host_port=18100,
+                url="http://localhost:18100/mcp",
+                chroma_path=chroma,
+            ),
+            runner=runner,
+            http_status_getter=lambda url: (_ for _ in ()).throw(http.client.RemoteDisconnected("Remote end closed connection without response")),
+            port_checker=lambda host, port: True,
+            monotonic=lambda: next(ticks),
+            sleep=lambda seconds: None,
+        )
+
+    assert "HTTP readiness check failed" in str(exc.value)

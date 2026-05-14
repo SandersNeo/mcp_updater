@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.client
 import socket
 import time
 from dataclasses import dataclass
@@ -81,7 +82,7 @@ def run_infrastructure_smoke_test(
 
         try:
             http_status = http_status_getter(context.url)
-        except URLError as exc:
+        except (URLError, OSError, http.client.HTTPException) as exc:
             last_failure = f"HTTP readiness check failed: {exc}"
             sleep(smoke_config.check_interval_seconds)
             continue
@@ -127,6 +128,8 @@ def _default_http_status_getter(url: str) -> int:
             return response.status
     except HTTPError as exc:
         return exc.code
+    except (URLError, OSError, http.client.HTTPException):
+        raise
 
 
 def _default_port_checker(host: str, port: int) -> bool:

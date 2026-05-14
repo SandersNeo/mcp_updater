@@ -74,8 +74,7 @@
       "enabled": true,
       "timeoutSeconds": 120,
       "checkIntervalSeconds": 5,
-      "httpReadyUrl": "http://localhost:18100/mcp",
-      "acceptableHttpStatusCodes": [200],
+      "acceptableHttpStatusCodes": [200, 400, 404, 405],
       "requireChromaNotEmpty": true,
       "logTailLines": 200,
       "logErrorPatterns": [

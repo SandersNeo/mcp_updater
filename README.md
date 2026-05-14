@@ -190,6 +190,27 @@ python .\mcp_smoke_test.py --config .\project.json
 
 Названия tools и имена аргументов настраиваются в `smokeTest.toolSmokeTest`.
 
+## Infrastructure Smoke Configuration
+
+Infrastructure smoke-test не использует отдельный `httpReadyUrl`.
+
+Реальная модель такая:
+
+- build infrastructure smoke ходит в `mcp.build.url`
+- production infrastructure smoke ходит в `mcp.production.url`
+
+Поле `smokeTest.infrastructure.acceptableHttpStatusCodes` задаёт, какие HTTP статусы считаются нормальным ответом readiness endpoint.
+
+Для MCP endpoint это важно, потому что `GET /mcp` нередко отвечает не `200`, а `405 Method Not Allowed`. Это не обязательно означает проблему контейнера: сервер может быть уже поднят, но не поддерживать `GET` на MCP endpoint.
+
+Практически безопасный набор для MCP readiness-check:
+
+```json
+"acceptableHttpStatusCodes": [200, 400, 404, 405]
+```
+
+Если в старом локальном конфиге ещё есть `smokeTest.infrastructure.httpReadyUrl`, updater его больше не использует. Источник истины для readiness URL — это `mcp.build.url` и `mcp.production.url`.
+
 ## Workflow update
 
 Основной `update` выполняет такие этапы:

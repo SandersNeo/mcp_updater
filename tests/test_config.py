@@ -105,7 +105,6 @@ def _base_payload() -> dict:
                 "enabled": True,
                 "timeoutSeconds": 60,
                 "checkIntervalSeconds": 5,
-                "httpReadyUrl": "http://localhost:18100/mcp",
                 "acceptableHttpStatusCodes": [200, 400, 404, 405],
                 "requireChromaNotEmpty": True,
                 "logTailLines": 200,
@@ -206,3 +205,12 @@ def test_gitlab_token_auth_requires_token_env(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigValidationError):
         load_project_config(config_path)
+
+
+def test_http_ready_url_is_not_required_anymore(tmp_path: Path) -> None:
+    payload = _base_payload()
+    config_path = _write_config(tmp_path, payload)
+
+    config = load_project_config(config_path)
+
+    assert config.smoke_test.infrastructure.acceptable_http_status_codes == [200, 400, 404, 405]

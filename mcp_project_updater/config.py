@@ -130,7 +130,6 @@ class InfrastructureSmokeConfig:
     enabled: bool
     timeout_seconds: int
     check_interval_seconds: int
-    http_ready_url: str
     acceptable_http_status_codes: list[int]
     require_chroma_not_empty: bool
     log_tail_lines: int
@@ -302,7 +301,6 @@ def _parse_project_config(raw: dict[str, Any], config_path: Path) -> ProjectConf
                 enabled=_expect_bool(infrastructure_raw.get("enabled"), "smokeTest.infrastructure.enabled"),
                 timeout_seconds=_expect_int(infrastructure_raw.get("timeoutSeconds"), "smokeTest.infrastructure.timeoutSeconds"),
                 check_interval_seconds=_expect_int(infrastructure_raw.get("checkIntervalSeconds"), "smokeTest.infrastructure.checkIntervalSeconds"),
-                http_ready_url=_expect_string(infrastructure_raw.get("httpReadyUrl"), "smokeTest.infrastructure.httpReadyUrl"),
                 acceptable_http_status_codes=_expect_list_of_ints(
                     infrastructure_raw.get("acceptableHttpStatusCodes"),
                     "smokeTest.infrastructure.acceptableHttpStatusCodes",

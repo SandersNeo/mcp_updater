@@ -27,6 +27,8 @@
   - `mcp.production.url`
   - `mcp.build.url`
   - `smokeTest.toolSmokeTest.toolPath`
+- Проверить `smokeTest.infrastructure.acceptableHttpStatusCodes`:
+  - для MCP endpoint обычно нужно допустить не только `200`, но и `405`
 - Проверить, что `smokeTest.profile=production` только если `toolSmokeTest.enabled=true`
 
 ## 3. Dry Run
@@ -45,6 +47,7 @@ python .\update_mcp_project.py --config .\project.json --dry-run --verbose
 - если repo раньше отсутствовал, локальный mirror был создан в `repo.path`
 - source detection нашёл ожидаемые `src/cf` и, при наличии, `src/cfe`
 - build и production URL в логе соответствуют реальной среде
+- readiness-check для build идёт по `mcp.build.url`, а не по отдельному `httpReadyUrl`
 
 ## 4. First Real Update
 
@@ -64,6 +67,7 @@ python .\update_mcp_project.py --config .\project.json --verbose
 - build container поднялся
 - build infrastructure smoke-test прошёл
 - build MCP tool smoke-test прошёл по `mcp.build.url`
+- если build endpoint отвечает `405`, это допускается только когда `405` включён в `acceptableHttpStatusCodes`
 
 ## 5. Production Switch Validation
 

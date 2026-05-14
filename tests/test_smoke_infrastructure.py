@@ -19,7 +19,6 @@ def _smoke_config() -> InfrastructureSmokeConfig:
         enabled=True,
         timeout_seconds=2,
         check_interval_seconds=0,
-        http_ready_url="http://localhost:18100/mcp",
         acceptable_http_status_codes=[200, 400, 404, 405],
         require_chroma_not_empty=True,
         log_tail_lines=50,

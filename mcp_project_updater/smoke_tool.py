@@ -79,8 +79,46 @@ def run_tool_smoke_test(
     payload = build_tool_smoke_config_payload(config, tool_smoke_config, url=url)
     config_path = write_tool_smoke_config(config.paths.state_root / "tool-smoke-config.json", payload)
     command = [sys.executable, str(tool_smoke_config.tool_path), "--config", str(config_path)]
-    result = runner(command, working_directory)
+    if runner is default_process_runner:
+        result = _run_default_process_runner_with_timeout(
+            command,
+            working_directory,
+            timeout_seconds=tool_smoke_config.timeout_seconds,
+        )
+    else:
+        result = runner(command, working_directory)
     if result.returncode != 0:
-        details = result.stderr.strip() or result.stdout.strip() or "Tool smoke-test failed."
+        details = result.stdout.strip() or result.stderr.strip() or "Tool smoke-test failed."
         raise ToolSmokeTestError(details, ExitCode.BUILD_SMOKE_FAILED)
     return result
+
+
+def _run_default_process_runner_with_timeout(
+    command: Sequence[str],
+    cwd: Path,
+    *,
+    timeout_seconds: int,
+) -> ToolSmokeRunResult:
+    try:
+        completed = subprocess.run(
+            list(command),
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return ToolSmokeRunResult(
+            command=list(command),
+            returncode=13,
+            stdout="MCP tool smoke-test timed out.",
+            stderr=exc.stderr or "",
+        )
+
+    return ToolSmokeRunResult(
+        command=list(command),
+        returncode=completed.returncode,
+        stdout=completed.stdout,
+        stderr=completed.stderr,
+    )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -136,3 +137,21 @@ def test_run_tool_smoke_test_raises_on_failure(tmp_path: Path) -> None:
         )
 
     assert exc.value.exit_code == ExitCode.BUILD_SMOKE_FAILED
+
+
+def test_run_tool_smoke_test_reports_timeout_cleanly(tmp_path: Path, monkeypatch) -> None:
+    config = load_project_config(_write_config(tmp_path))
+
+    def _fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=kwargs.get("args", args[0] if args else "python"), timeout=60)
+
+    monkeypatch.setattr("mcp_project_updater.smoke_tool.subprocess.run", _fake_run)
+
+    with pytest.raises(ToolSmokeTestError) as exc:
+        run_tool_smoke_test(
+            config,
+            config.smoke_test.tool_smoke_test,
+            working_directory=config.repo.path,
+        )
+
+    assert str(exc.value) == "MCP tool smoke-test timed out."

@@ -25,7 +25,7 @@ class SessionFactoryConfig:
 
 async def run_smoke_test(config: SmokeToolConfig, session_factory=None) -> SmokeTestRunResult:
     session_factory = session_factory or _sdk_session_factory
-    return await asyncio.wait_for(_run_smoke_test_internal(config, session_factory), timeout=config.timeout_seconds)
+    return await _run_smoke_test_internal(config, session_factory)
 
 
 async def _run_smoke_test_internal(config: SmokeToolConfig, session_factory) -> SmokeTestRunResult:

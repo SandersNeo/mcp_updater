@@ -29,11 +29,14 @@ class ContainerStartResult:
     container_id: str
 
 
-def prepare_chroma_build(chroma_root: Path) -> Path:
+def prepare_chroma_build(chroma_root: Path, *, seed_source: Path | None = None) -> Path:
     build_path = chroma_root / "build"
     if build_path.exists():
         shutil.rmtree(build_path)
-    build_path.mkdir(parents=True, exist_ok=True)
+    if seed_source is not None and seed_source.exists():
+        shutil.copytree(seed_source, build_path)
+    else:
+        build_path.mkdir(parents=True, exist_ok=True)
     return build_path
 
 
@@ -61,6 +64,9 @@ def build_runtime_container_command(
     code_path: Path,
     chroma_path: Path,
     reset_database: bool,
+    index_metadata: bool,
+    index_code: bool,
+    index_help: bool,
 ) -> list[str]:
     resolved_secret_env = resolve_secret_environment(mcp_config.secret_env)
     container_env = build_container_environment(
@@ -70,6 +76,9 @@ def build_runtime_container_command(
             "RESET_DATABASE": _bool_to_env(reset_database),
             "RESET_CACHE": _bool_to_env(mcp_config.reset_cache),
             "USESSE": _bool_to_env(mcp_config.use_sse),
+            "INDEX_METADATA": _bool_to_env(index_metadata),
+            "INDEX_CODE": _bool_to_env(index_code),
+            "INDEX_HELP": _bool_to_env(index_help),
         },
     )
 
@@ -107,6 +116,11 @@ def build_build_container_command(
     mcp_config: MCPConfig,
     build_paths: BuildPaths,
     paths_config: PathsConfig,
+    *,
+    reset_database: bool,
+    index_metadata: bool,
+    index_code: bool,
+    index_help: bool,
 ) -> list[str]:
     return build_runtime_container_command(
         mcp_config,
@@ -114,7 +128,10 @@ def build_build_container_command(
         metadata_path=build_paths.metadata,
         code_path=build_paths.code,
         chroma_path=paths_config.chroma_root / "build",
-        reset_database=True,
+        reset_database=reset_database,
+        index_metadata=index_metadata,
+        index_code=index_code,
+        index_help=index_help,
     )
 
 
@@ -129,6 +146,9 @@ def build_production_container_command(
         code_path=paths_config.staging_root / "current" / "code",
         chroma_path=paths_config.chroma_root / "current",
         reset_database=False,
+        index_metadata=mcp_config.index_metadata,
+        index_code=mcp_config.index_code,
+        index_help=mcp_config.index_help,
     )
 
 
@@ -154,14 +174,27 @@ def start_build_container(
     paths_config: PathsConfig,
     *,
     runner: DockerCommandRunner,
+    reset_database: bool | None = None,
+    seed_chroma_from: Path | None = None,
+    index_metadata: bool | None = None,
+    index_code: bool | None = None,
+    index_help: bool | None = None,
 ) -> BuildContainerStartResult:
-    prepare_chroma_build(paths_config.chroma_root)
+    prepare_chroma_build(paths_config.chroma_root, seed_source=seed_chroma_from)
     remove_container(
         mcp_config.build.container_name,
         runner=runner,
         error_code=ExitCode.BUILD_CONTAINER_FAILED,
     )
-    command = build_build_container_command(mcp_config, build_paths, paths_config)
+    command = build_build_container_command(
+        mcp_config,
+        build_paths,
+        paths_config,
+        reset_database=mcp_config.reset_database_on_build if reset_database is None else reset_database,
+        index_metadata=mcp_config.index_metadata if index_metadata is None else index_metadata,
+        index_code=mcp_config.index_code if index_code is None else index_code,
+        index_help=mcp_config.index_help if index_help is None else index_help,
+    )
     result = run_docker_command(
         command,
         runner=runner,

@@ -55,6 +55,7 @@ def test_load_smoke_config(tmp_path: Path) -> None:
             {
                 "url": "http://localhost:18100/mcp",
                 "timeoutSeconds": 60,
+                "overallTimeoutSeconds": 300,
                 "indexCode": True,
                 "diagnostic": True,
                 "metadataQueries": ["Конфигурации"],
@@ -70,12 +71,14 @@ def test_load_smoke_config(tmp_path: Path) -> None:
     assert config.metadata_tool_name == "metadatasearch"
     assert config.code_tool_name == "codesearch"
     assert config.diagnostic is True
+    assert config.overall_timeout_seconds == 300
 
 
 def test_run_smoke_test_success() -> None:
     config = SmokeToolConfig(
         url="http://localhost:18100/mcp",
         timeout_seconds=5,
+        overall_timeout_seconds=30,
         index_code=True,
         diagnostic=False,
         metadata_tool_name="metadatasearch",
@@ -108,6 +111,7 @@ def test_run_smoke_test_fails_when_tool_missing() -> None:
     config = SmokeToolConfig(
         url="http://localhost:18100/mcp",
         timeout_seconds=5,
+        overall_timeout_seconds=30,
         index_code=False,
         diagnostic=False,
         metadata_tool_name="metadatasearch",
@@ -137,6 +141,7 @@ def test_run_smoke_test_emits_diagnostics(capsys: pytest.CaptureFixture[str]) ->
     config = SmokeToolConfig(
         url="http://localhost:18100/mcp",
         timeout_seconds=5,
+        overall_timeout_seconds=30,
         index_code=True,
         diagnostic=True,
         metadata_tool_name="metadatasearch",

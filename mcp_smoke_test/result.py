@@ -7,6 +7,7 @@ from dataclasses import dataclass
 class SmokeToolConfig:
     url: str
     timeout_seconds: int
+    overall_timeout_seconds: int
     index_code: bool
     diagnostic: bool
     metadata_tool_name: str

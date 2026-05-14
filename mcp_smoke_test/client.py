@@ -90,6 +90,7 @@ def load_smoke_config(config_path: Path) -> SmokeToolConfig:
     return SmokeToolConfig(
         url=str(payload["url"]),
         timeout_seconds=int(payload["timeoutSeconds"]),
+        overall_timeout_seconds=int(payload.get("overallTimeoutSeconds", payload["timeoutSeconds"])),
         index_code=bool(payload["indexCode"]),
         diagnostic=bool(payload.get("diagnostic", False)),
         metadata_tool_name=str(payload.get("metadataToolName", "metadatasearch")),

@@ -6,7 +6,9 @@ from pathlib import Path
 from mcp_project_updater.cli import main, parse_args
 from mcp_project_updater.constants import ExitCode
 from mcp_project_updater.errors import UpdaterError
+from mcp_project_updater.fingerprints import compute_source_fingerprint
 from mcp_project_updater.git_ops import RepoValidationResult
+from mcp_project_updater.source_detector import detect_sources
 
 
 def _write_config(tmp_path: Path) -> Path:
@@ -167,6 +169,27 @@ def test_main_returns_success_when_no_changes_and_not_forced(tmp_path: Path, mon
     assert result == ExitCode.SUCCESS
 
 
+def test_main_returns_success_when_source_fingerprint_matches_and_not_forced(tmp_path: Path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    source_result = detect_sources(tmp_path / "repo", "src/cf", False, "src/cfe", False)
+    source_fingerprint = compute_source_fingerprint(source_result)
+    state_root = tmp_path / "state"
+    state_root.mkdir(parents=True, exist_ok=True)
+    (state_root / "last_source_fingerprint").write_text(f"{source_fingerprint}\n", encoding="utf-8")
+    current_report_path = tmp_path / "staging" / "current" / "metadata" / "Report.txt"
+    current_report_path.parent.mkdir(parents=True, exist_ok=True)
+    current_report_path.write_text("ok", encoding="utf-8")
+    current_chroma = tmp_path / "chroma" / "current"
+    current_chroma.mkdir(parents=True, exist_ok=True)
+    (current_chroma / "db.bin").write_text("ok", encoding="utf-8")
+
+    _mock_phase2_dependencies(monkeypatch, commit="new-commit")
+
+    result = main(["--config", str(config_path)])
+
+    assert result == ExitCode.SUCCESS
+
+
 def test_main_returns_warning_when_success_notification_fails(tmp_path: Path, monkeypatch) -> None:
     config_path = _write_config(tmp_path)
     payload = json.loads(config_path.read_text(encoding="utf-8"))
@@ -242,7 +265,7 @@ def _mock_phase2_dependencies(
         monkeypatch.setattr("mcp_project_updater.cli.ensure_docker_available", lambda: "26.1.0")
         monkeypatch.setattr(
             "mcp_project_updater.cli.start_build_container",
-            lambda mcp_config, build_paths, paths_config, runner: type(
+            lambda mcp_config, build_paths, paths_config, runner, **kwargs: type(
                 "BuildContainerResult",
                 (),
                 {"command": ["docker", "run"], "container_id": "cid"},

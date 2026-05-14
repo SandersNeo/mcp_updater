@@ -53,6 +53,7 @@ def _resolve_config(args) -> SmokeToolConfig:
     return SmokeToolConfig(
         url=args.url,
         timeout_seconds=args.timeout,
+        overall_timeout_seconds=args.timeout,
         index_code=bool(args.index_code),
         diagnostic=bool(args.diagnostic),
         metadata_tool_name=args.metadata_tool,

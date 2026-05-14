@@ -9,6 +9,7 @@ from typing import Sequence
 from .config import ProjectConfig, load_project_config
 from .constants import ExitCode
 from .docker_ops import default_docker_runner, ensure_docker_available, write_container_logs
+from .fingerprints import compute_report_hash, compute_source_fingerprint
 from .git_ops import determine_target_commit, ensure_repo_available, validate_repo
 from .lock import LockManager
 from .mcp_container import start_build_container
@@ -89,6 +90,8 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
     logger.info("Lock acquired: %s", state_store.lock_path)
     stage = "startup"
     target_commit: str | None = None
+    source_fingerprint: str | None = None
+    report_hash: str | None = None
     last_indexed_commit_at_start = state_store.read_last_indexed_commit()
     production_untouched = True
     rollback_attempted = False
@@ -142,6 +145,20 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
             logger.info("No changes detected. Update is skipped.")
             return ExitCode.SUCCESS
 
+        stage = "source_fingerprint"
+        source_fingerprint = compute_source_fingerprint(source_result)
+        logger.info("Source fingerprint: %s", source_fingerprint)
+        current_report_exists = (config.paths.staging_root / "current" / "metadata" / "Report.txt").exists()
+        current_chroma_exists = (config.paths.chroma_root / "current").exists()
+        if (
+            source_fingerprint == state_snapshot.last_source_fingerprint
+            and not options.force
+            and current_report_exists
+            and current_chroma_exists
+        ):
+            logger.info("No effective source changes detected. Update is skipped.")
+            return ExitCode.SUCCESS
+
         if options.dry_run:
             _log_dry_run_summary(logger, config, options, state_snapshot, target_commit, source_result)
             return ExitCode.SUCCESS
@@ -166,6 +183,15 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
             build_paths.diagnostics,
         )
         logger.info("Validated report: %s (%s bytes)", report_result.report_path, report_result.report_size)
+        report_hash = compute_report_hash(report_result.report_path)
+        metadata_unchanged = (
+            not options.force
+            and report_hash == state_snapshot.last_report_hash
+            and current_report_exists
+            and current_chroma_exists
+        )
+        logger.info("Report hash: %s", report_hash)
+        logger.info("Metadata unchanged: %s", metadata_unchanged)
 
         stage = "code_prepare"
         prepare_build_code_directory(build_paths, source_result)
@@ -181,6 +207,9 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
             build_paths,
             config.paths,
             runner=default_docker_runner,
+            reset_database=False if metadata_unchanged else None,
+            seed_chroma_from=(config.paths.chroma_root / "current") if metadata_unchanged else None,
+            index_metadata=False if metadata_unchanged else None,
         )
         logger.info("Started build container: %s", config.mcp.build.container_name)
 
@@ -228,6 +257,10 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
             docker_runner=default_docker_runner,
         )
         logger.info("Production switch completed for commit %s", switch_result.target_commit)
+        if source_fingerprint is not None:
+            state_store.write_last_source_fingerprint(source_fingerprint)
+        if report_hash is not None:
+            state_store.write_last_report_hash(report_hash)
         stage = "success"
         return _handle_success_notification_and_cleanup(
             config,
@@ -327,6 +360,8 @@ def _log_dry_run_summary(
     logger.info("Last indexed commit: %s", state_snapshot.last_indexed_commit or "<none>")
     logger.info("Current commit: %s", state_snapshot.current_commit or "<none>")
     logger.info("Previous commit: %s", state_snapshot.previous_commit or "<none>")
+    logger.info("Last source fingerprint: %s", state_snapshot.last_source_fingerprint or "<none>")
+    logger.info("Last report hash: %s", state_snapshot.last_report_hash or "<none>")
     logger.info("Main source exists: %s", source_result.main_exists)
     logger.info("Extension source exists: %s", source_result.extension_exists)
     logger.info("Build URL: %s", config.mcp.build.url)

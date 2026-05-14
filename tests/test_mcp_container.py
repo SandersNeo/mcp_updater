@@ -110,6 +110,16 @@ def test_prepare_chroma_build_resets_directory(tmp_path: Path) -> None:
     assert not any(prepared.iterdir())
 
 
+def test_prepare_chroma_build_can_seed_from_current(tmp_path: Path) -> None:
+    current_dir = tmp_path / "chroma" / "current"
+    current_dir.mkdir(parents=True)
+    (current_dir / "db.bin").write_text("current", encoding="utf-8")
+
+    prepared = prepare_chroma_build(tmp_path / "chroma", seed_source=current_dir)
+
+    assert (prepared / "db.bin").read_text(encoding="utf-8") == "current"
+
+
 def test_build_build_container_command_requires_secret_env(tmp_path: Path, monkeypatch) -> None:
     config = load_project_config(_write_config(tmp_path))
     build_paths = prepare_build_staging(config.paths.staging_root, config.project)
@@ -117,7 +127,15 @@ def test_build_build_container_command_requires_secret_env(tmp_path: Path, monke
     monkeypatch.delenv("TEST_LICENSE_ENV", raising=False)
 
     with pytest.raises(MissingSecretEnvError) as exc:
-        build_build_container_command(config.mcp, build_paths, config.paths)
+        build_build_container_command(
+            config.mcp,
+            build_paths,
+            config.paths,
+            reset_database=True,
+            index_metadata=True,
+            index_code=True,
+            index_help=False,
+        )
 
     assert exc.value.exit_code == ExitCode.MISSING_REQUIRED_SECRET
 
@@ -139,3 +157,36 @@ def test_start_build_container_runs_remove_and_run(tmp_path: Path, monkeypatch) 
     assert result.container_id == "container-id"
     assert calls[0][:3] == ["docker", "rm", "-f"]
     assert calls[1][:3] == ["docker", "run", "-d"]
+    assert any(part == "RESET_DATABASE=true" for part in calls[1])
+    assert any(part == "INDEX_METADATA=true" for part in calls[1])
+    assert any(part == "INDEX_CODE=true" for part in calls[1])
+
+
+def test_start_build_container_can_disable_metadata_and_seed_from_current(tmp_path: Path, monkeypatch) -> None:
+    config = load_project_config(_write_config(tmp_path))
+    build_paths = prepare_build_staging(config.paths.staging_root, config.project)
+    monkeypatch.setenv("TEST_LICENSE_ENV", "secret")
+    current_chroma = config.paths.chroma_root / "current"
+    current_chroma.mkdir(parents=True)
+    (current_chroma / "db.bin").write_text("seed", encoding="utf-8")
+    calls = []
+
+    def runner(command, cwd):
+        calls.append(command)
+        if command[:3] == ["docker", "rm", "-f"]:
+            return DockerCommandResult(1, "", "No such container")
+        return DockerCommandResult(0, "container-id\n", "")
+
+    start_build_container(
+        config.mcp,
+        build_paths,
+        config.paths,
+        runner=runner,
+        reset_database=False,
+        seed_chroma_from=current_chroma,
+        index_metadata=False,
+    )
+
+    assert (config.paths.chroma_root / "build" / "db.bin").read_text(encoding="utf-8") == "seed"
+    assert any(part == "RESET_DATABASE=false" for part in calls[1])
+    assert any(part == "INDEX_METADATA=false" for part in calls[1])

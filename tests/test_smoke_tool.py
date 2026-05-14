@@ -12,6 +12,17 @@ from mcp_project_updater.constants import ExitCode
 from mcp_project_updater.smoke_tool import ToolSmokeTestError, ToolSmokeRunResult, build_tool_smoke_config_payload, run_tool_smoke_test
 
 
+class _FakeClock:
+    def __init__(self) -> None:
+        self.current = 0.0
+
+    def monotonic(self) -> float:
+        return self.current
+
+    def sleep(self, seconds: float) -> None:
+        self.current += seconds
+
+
 def _write_config(tmp_path: Path) -> Path:
     repo_path = tmp_path / "repo"
     repo_path.mkdir()
@@ -74,7 +85,9 @@ def _write_config(tmp_path: Path) -> Path:
                 "enabled": True,
                 "toolPath": str(tool_path),
                 "url": "http://localhost:18100/mcp",
-                "timeoutSeconds": 60,
+                "timeoutSeconds": 300,
+                "attemptTimeoutSeconds": 60,
+                "retryIntervalSeconds": 10,
                 "diagnostic": True,
                 "metadataQueries": ["Конфигурации"],
                 "codeQueries": ["Процедура"],
@@ -105,6 +118,8 @@ def test_build_tool_smoke_config_payload_uses_defaults(tmp_path: Path) -> None:
     assert payload["codeToolName"] == "codesearch"
     assert payload["codeQueryArgument"] == "query"
     assert payload["diagnostic"] is True
+    assert payload["timeoutSeconds"] == 60
+    assert payload["overallTimeoutSeconds"] == 300
 
 
 def test_run_tool_smoke_test_invokes_cli(tmp_path: Path) -> None:
@@ -143,11 +158,18 @@ def test_run_tool_smoke_test_raises_on_failure(tmp_path: Path) -> None:
 
 def test_run_tool_smoke_test_reports_timeout_cleanly(tmp_path: Path, monkeypatch) -> None:
     config = load_project_config(_write_config(tmp_path))
+    config.smoke_test.tool_smoke_test.timeout_seconds = 3
+    config.smoke_test.tool_smoke_test.attempt_timeout_seconds = 1
+    config.smoke_test.tool_smoke_test.retry_interval_seconds = 1
+    clock = _FakeClock()
 
     def _fake_run(*args, **kwargs):
+        clock.current += kwargs["timeout"]
         raise subprocess.TimeoutExpired(cmd=kwargs.get("args", args[0] if args else "python"), timeout=60)
 
     monkeypatch.setattr("mcp_project_updater.smoke_tool.subprocess.run", _fake_run)
+    monkeypatch.setattr("mcp_project_updater.smoke_tool.time.monotonic", clock.monotonic)
+    monkeypatch.setattr("mcp_project_updater.smoke_tool.time.sleep", clock.sleep)
 
     with pytest.raises(ToolSmokeTestError) as exc:
         run_tool_smoke_test(
@@ -156,13 +178,18 @@ def test_run_tool_smoke_test_reports_timeout_cleanly(tmp_path: Path, monkeypatch
             working_directory=config.repo.path,
         )
 
-    assert "MCP tool smoke-test timed out." in str(exc.value)
+    assert "MCP tool smoke-test timed out after 2 attempt(s) over 3 second(s)." in str(exc.value)
 
 
 def test_run_tool_smoke_test_includes_stderr_diagnostics_on_timeout(tmp_path: Path, monkeypatch) -> None:
     config = load_project_config(_write_config(tmp_path))
+    config.smoke_test.tool_smoke_test.timeout_seconds = 3
+    config.smoke_test.tool_smoke_test.attempt_timeout_seconds = 1
+    config.smoke_test.tool_smoke_test.retry_interval_seconds = 1
+    clock = _FakeClock()
 
     def _fake_run(*args, **kwargs):
+        clock.current += kwargs["timeout"]
         raise subprocess.TimeoutExpired(
             cmd=kwargs.get("args", args[0] if args else "python"),
             timeout=60,
@@ -170,6 +197,8 @@ def test_run_tool_smoke_test_includes_stderr_diagnostics_on_timeout(tmp_path: Pa
         )
 
     monkeypatch.setattr("mcp_project_updater.smoke_tool.subprocess.run", _fake_run)
+    monkeypatch.setattr("mcp_project_updater.smoke_tool.time.monotonic", clock.monotonic)
+    monkeypatch.setattr("mcp_project_updater.smoke_tool.time.sleep", clock.sleep)
 
     with pytest.raises(ToolSmokeTestError) as exc:
         run_tool_smoke_test(
@@ -179,3 +208,33 @@ def test_run_tool_smoke_test_includes_stderr_diagnostics_on_timeout(tmp_path: Pa
         )
 
     assert "[diagnostic] list_tools:start" in str(exc.value)
+
+
+def test_run_tool_smoke_test_retries_timeout_until_success(tmp_path: Path, monkeypatch) -> None:
+    config = load_project_config(_write_config(tmp_path))
+    attempts = {"count": 0}
+    clock = _FakeClock()
+
+    def _fake_run(*args, **kwargs):
+        attempts["count"] += 1
+        clock.current += kwargs["timeout"]
+        if attempts["count"] < 3:
+            raise subprocess.TimeoutExpired(
+                cmd=kwargs.get("args", args[0] if args else "python"),
+                timeout=60,
+                stderr=b"[diagnostic] call_tool:start name=codesearch query='x'",
+            )
+        return subprocess.CompletedProcess(args[0], 0, stdout='{"ok":true}', stderr="")
+
+    monkeypatch.setattr("mcp_project_updater.smoke_tool.subprocess.run", _fake_run)
+    monkeypatch.setattr("mcp_project_updater.smoke_tool.time.monotonic", clock.monotonic)
+    monkeypatch.setattr("mcp_project_updater.smoke_tool.time.sleep", clock.sleep)
+
+    result = run_tool_smoke_test(
+        config,
+        config.smoke_test.tool_smoke_test,
+        working_directory=config.repo.path,
+    )
+
+    assert result.returncode == 0
+    assert attempts["count"] == 3

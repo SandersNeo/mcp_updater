@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
@@ -48,10 +50,12 @@ def build_tool_smoke_config_payload(
     tool_smoke_config: ToolSmokeConfig,
     *,
     url: str | None = None,
+    attempt_timeout_seconds: int | None = None,
 ) -> dict[str, object]:
     return {
         "url": url or tool_smoke_config.url,
-        "timeoutSeconds": tool_smoke_config.timeout_seconds,
+        "timeoutSeconds": attempt_timeout_seconds or tool_smoke_config.attempt_timeout_seconds,
+        "overallTimeoutSeconds": tool_smoke_config.timeout_seconds,
         "indexCode": config.mcp.index_code,
         "diagnostic": tool_smoke_config.diagnostic,
         "metadataToolName": tool_smoke_config.metadata_tool_name,
@@ -77,21 +81,53 @@ def run_tool_smoke_test(
     runner: ProcessRunner = default_process_runner,
     url: str | None = None,
 ) -> ToolSmokeRunResult:
-    payload = build_tool_smoke_config_payload(config, tool_smoke_config, url=url)
-    config_path = write_tool_smoke_config(config.paths.state_root / "tool-smoke-config.json", payload)
-    command = [sys.executable, str(tool_smoke_config.tool_path), "--config", str(config_path)]
-    if runner is default_process_runner:
-        result = _run_default_process_runner_with_timeout(
-            command,
-            working_directory,
-            timeout_seconds=tool_smoke_config.timeout_seconds,
+    deadline = time.monotonic() + tool_smoke_config.timeout_seconds
+    attempts = 0
+    last_result: ToolSmokeRunResult | None = None
+
+    while True:
+        attempts += 1
+        remaining_seconds = max(1, math.ceil(deadline - time.monotonic()))
+        attempt_timeout_seconds = min(tool_smoke_config.attempt_timeout_seconds, remaining_seconds)
+        payload = build_tool_smoke_config_payload(
+            config,
+            tool_smoke_config,
+            url=url,
+            attempt_timeout_seconds=attempt_timeout_seconds,
         )
-    else:
-        result = runner(command, working_directory)
-    if result.returncode != 0:
-        details = _format_process_failure(result) or "Tool smoke-test failed."
-        raise ToolSmokeTestError(details, ExitCode.BUILD_SMOKE_FAILED)
-    return result
+        config_path = write_tool_smoke_config(config.paths.state_root / "tool-smoke-config.json", payload)
+        command = [sys.executable, str(tool_smoke_config.tool_path), "--config", str(config_path)]
+        if runner is default_process_runner:
+            result = _run_default_process_runner_with_timeout(
+                command,
+                working_directory,
+                timeout_seconds=attempt_timeout_seconds,
+            )
+        else:
+            result = runner(command, working_directory)
+
+        if result.returncode == 0:
+            return result
+
+        if not _is_retryable_timeout_result(result):
+            details = _format_process_failure(result) or "Tool smoke-test failed."
+            raise ToolSmokeTestError(details, ExitCode.BUILD_SMOKE_FAILED)
+
+        last_result = result
+        remaining_after_attempt = deadline - time.monotonic()
+        if remaining_after_attempt <= 0:
+            break
+        sleep_seconds = min(tool_smoke_config.retry_interval_seconds, math.floor(remaining_after_attempt))
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
+
+    details = _format_process_failure(last_result) if last_result is not None else ""
+    summary = (
+        f"MCP tool smoke-test timed out after {attempts} attempt(s) "
+        f"over {tool_smoke_config.timeout_seconds} second(s)."
+    )
+    combined = "\n".join(part for part in (summary, details) if part)
+    raise ToolSmokeTestError(combined, ExitCode.BUILD_SMOKE_FAILED)
 
 
 def _run_default_process_runner_with_timeout(
@@ -134,6 +170,13 @@ def _format_process_failure(result: ToolSmokeRunResult) -> str:
     if parts[0] == parts[1]:
         return parts[0]
     return "\n".join(parts)
+
+
+def _is_retryable_timeout_result(result: ToolSmokeRunResult) -> bool:
+    if result.returncode != 13:
+        return False
+    text = "\n".join(part for part in (result.stdout, result.stderr) if part)
+    return "MCP tool smoke-test timed out." in text
 
 
 def _coerce_subprocess_output(value: str | bytes | None) -> str:

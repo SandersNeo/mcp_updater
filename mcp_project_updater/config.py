@@ -143,6 +143,8 @@ class ToolSmokeConfig:
     tool_path: Path
     url: str
     timeout_seconds: int
+    attempt_timeout_seconds: int
+    retry_interval_seconds: int
     diagnostic: bool
     metadata_tool_name: str
     metadata_query_argument: str
@@ -227,6 +229,8 @@ def _parse_project_config(raw: dict[str, Any], config_path: Path) -> ProjectConf
     notifications_raw = _expect_mapping(raw.get("notifications"), "notifications")
     retention_raw = _expect_mapping(raw.get("retention"), "retention")
     rollback_raw = _expect_mapping(raw.get("rollback", {}), "rollback")
+
+    tool_timeout_seconds = _expect_int(tool_raw.get("timeoutSeconds"), "smokeTest.toolSmokeTest.timeoutSeconds")
 
     return ProjectConfig(
         project=_expect_string(raw.get("project"), "project"),
@@ -318,7 +322,15 @@ def _parse_project_config(raw: dict[str, Any], config_path: Path) -> ProjectConf
                 enabled=_expect_bool(tool_raw.get("enabled"), "smokeTest.toolSmokeTest.enabled"),
                 tool_path=_expect_path_string(tool_raw.get("toolPath"), "smokeTest.toolSmokeTest.toolPath"),
                 url=_expect_string(tool_raw.get("url"), "smokeTest.toolSmokeTest.url"),
-                timeout_seconds=_expect_int(tool_raw.get("timeoutSeconds"), "smokeTest.toolSmokeTest.timeoutSeconds"),
+                timeout_seconds=tool_timeout_seconds,
+                attempt_timeout_seconds=_expect_int(
+                    tool_raw.get("attemptTimeoutSeconds", min(tool_timeout_seconds, 60)),
+                    "smokeTest.toolSmokeTest.attemptTimeoutSeconds",
+                ),
+                retry_interval_seconds=_expect_int(
+                    tool_raw.get("retryIntervalSeconds", 15),
+                    "smokeTest.toolSmokeTest.retryIntervalSeconds",
+                ),
                 diagnostic=_expect_bool(tool_raw.get("diagnostic", False), "smokeTest.toolSmokeTest.diagnostic"),
                 metadata_tool_name=_expect_string(
                     tool_raw.get("metadataToolName", "metadatasearch"),
@@ -404,6 +416,15 @@ def _validate_project_config(config: ProjectConfig) -> None:
 
     if config.smoke_test.profile == "production" and not config.smoke_test.tool_smoke_test.enabled:
         raise ConfigValidationError("toolSmokeTest.enabled=false is not allowed when smokeTest.profile=production.")
+
+    if config.smoke_test.tool_smoke_test.timeout_seconds <= 0:
+        raise ConfigValidationError("Field 'smokeTest.toolSmokeTest.timeoutSeconds' must be greater than 0.")
+
+    if config.smoke_test.tool_smoke_test.attempt_timeout_seconds <= 0:
+        raise ConfigValidationError("Field 'smokeTest.toolSmokeTest.attemptTimeoutSeconds' must be greater than 0.")
+
+    if config.smoke_test.tool_smoke_test.retry_interval_seconds < 0:
+        raise ConfigValidationError("Field 'smokeTest.toolSmokeTest.retryIntervalSeconds' must be greater than or equal to 0.")
 
     if config.notifications.enabled and (config.notifications.on_failure or config.notifications.on_rollback):
         if not config.notifications.webhook_url_env:

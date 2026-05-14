@@ -115,7 +115,9 @@ def _base_payload() -> dict:
                 "enabled": True,
                 "toolPath": "C:/tools/mcp_smoke_test.py",
                 "url": "http://localhost:18100/mcp",
-                "timeoutSeconds": 60,
+                "timeoutSeconds": 300,
+                "attemptTimeoutSeconds": 60,
+                "retryIntervalSeconds": 15,
                 "diagnostic": False,
                 "metadataToolName": "metadatasearch",
                 "metadataQueryArgument": "query",
@@ -154,6 +156,9 @@ def test_load_project_config_defaults_and_validation(tmp_path: Path) -> None:
     assert config.rollback.preserve_failed_index is True
     assert config.mcp.production.host_port == 8100
     assert config.smoke_test.tool_smoke_test.diagnostic is False
+    assert config.smoke_test.tool_smoke_test.timeout_seconds == 300
+    assert config.smoke_test.tool_smoke_test.attempt_timeout_seconds == 60
+    assert config.smoke_test.tool_smoke_test.retry_interval_seconds == 15
 
 
 def test_profile_defaults_to_dev(tmp_path: Path) -> None:

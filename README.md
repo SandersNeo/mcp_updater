@@ -191,6 +191,15 @@ python .\mcp_smoke_test.py --config .\project.json
 Названия tools и имена аргументов настраиваются в `smokeTest.toolSmokeTest`.
 Для временной диагностики можно включить `smokeTest.toolSmokeTest.diagnostic=true`: тогда `mcp_smoke_test.py` будет писать в `stderr`, на каком шаге он находится (`connect`, `initialize`, `list_tools`, `call_tool`).
 
+Для долгой индексации tool smoke работает по модели `общий дедлайн + короткие попытки`:
+
+- `timeoutSeconds` — общий лимит ожидания readiness code/metadata tools
+- `attemptTimeoutSeconds` — лимит одной попытки `mcp_smoke_test.py`
+- `retryIntervalSeconds` — пауза между повторными попытками после timeout
+
+Это безопаснее, чем один `codesearch` на несколько часов: зависший запрос не держится бесконечно, а updater периодически перепроверяет готовность индекса.
+В коде сейчас нет жёсткого верхнего лимита для `smokeTest.toolSmokeTest.timeoutSeconds`, поэтому для больших конфигураций можно ставить и `54000` секунд (15 часов), и больше, если это соответствует реальному профилю индексации.
+
 ## Infrastructure Smoke Configuration
 
 Infrastructure smoke-test не использует отдельный `httpReadyUrl`.
@@ -234,6 +243,20 @@ Infrastructure smoke-test не использует отдельный `httpRead
     production MCP tool smoke-test по `mcp.production.url`, если `smokeTest.toolSmokeTest.enabled=true`
 14. При ошибке production smoke-test запускает automatic rollback.
 15. Обновляет state и отправляет notifications.
+
+## Optimization Model
+
+Updater использует два уровня пропуска/оптимизации:
+
+- `target_commit == last_indexed_commit` и нет `--force` -> весь update пропускается сразу
+- `source fingerprint == last_source_fingerprint` и текущие production artifacts существуют -> update тоже пропускается, даже если commit новый, но 1С-исходники реально не изменились
+
+Если parser всё же был запущен, updater дополнительно считает `report hash`:
+
+- `report hash == last_report_hash` -> metadata считается неизменившейся
+- в этом режиме build стартует не с пустого `chroma/build`, а с копии `chroma/current`
+- build container запускается с `RESET_DATABASE=false` и `INDEX_METADATA=false`
+- это позволяет не переиндексировать `metadatasearch`, если изменилась только code-часть
 
 ## Workflow rollback
 

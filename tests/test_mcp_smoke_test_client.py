@@ -48,6 +48,17 @@ class _FakeSession:
         return self._responses[(name, next(iter(arguments.values())))]
 
 
+class _BoomSession:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def list_tools(self):
+        raise RuntimeError("transport boom")
+
+
 def test_load_smoke_config(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     path.write_text(
@@ -171,3 +182,65 @@ def test_run_smoke_test_emits_diagnostics(capsys: pytest.CaptureFixture[str]) ->
     assert result.code_ok is True
     assert "[diagnostic] list_tools:start" in captured.err
     assert "[diagnostic] call_tool:ok name=metadatasearch query='metadata'" in captured.err
+
+
+def test_run_smoke_test_wraps_transport_errors() -> None:
+    config = SmokeToolConfig(
+        url="http://localhost:18100/mcp",
+        timeout_seconds=5,
+        overall_timeout_seconds=30,
+        index_code=False,
+        diagnostic=True,
+        metadata_tool_name="metadatasearch",
+        metadata_query_argument="query",
+        metadata_queries=["metadata"],
+        code_tool_name="codesearch",
+        code_query_argument="query",
+        code_queries=[],
+    )
+
+    async def _run():
+        return await run_smoke_test(
+            config,
+            session_factory=lambda url: _BoomSession(),
+        )
+
+    with pytest.raises(SmokeTestError) as exc:
+        asyncio.run(_run())
+
+    assert "MCP request failed during list_tools" in str(exc.value)
+
+
+def test_run_smoke_test_passes_request_timeout_to_session_factory() -> None:
+    config = SmokeToolConfig(
+        url="http://localhost:18100/mcp",
+        timeout_seconds=17,
+        overall_timeout_seconds=30,
+        index_code=False,
+        diagnostic=False,
+        metadata_tool_name="metadatasearch",
+        metadata_query_argument="query",
+        metadata_queries=["metadata"],
+        code_tool_name="codesearch",
+        code_query_argument="query",
+        code_queries=[],
+    )
+    seen = {}
+
+    class _TimeoutAwareSession(_FakeSession):
+        pass
+
+    def factory(url, *, request_timeout_seconds=None, progress_callback=None):
+        seen["timeout"] = request_timeout_seconds
+        return _TimeoutAwareSession(
+            ["metadatasearch"],
+            {("metadatasearch", "metadata"): _FakeResult([_FakeText("ok")])},
+        )
+
+    async def _run():
+        return await run_smoke_test(config, session_factory=factory)
+
+    result = asyncio.run(_run())
+
+    assert result.metadata_ok is True
+    assert seen["timeout"] == 17

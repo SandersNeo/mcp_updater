@@ -30,7 +30,12 @@ class SessionFactoryConfig:
 async def run_smoke_test(config: SmokeToolConfig, session_factory=None) -> SmokeTestRunResult:
     session_factory = session_factory or _sdk_session_factory
     progress_callback = _default_progress_callback if config.diagnostic else None
-    return await _run_smoke_test_internal(config, session_factory, progress_callback=progress_callback)
+    return await _run_smoke_test_internal(
+        config,
+        session_factory,
+        progress_callback=progress_callback,
+        request_timeout_seconds=config.timeout_seconds,
+    )
 
 
 async def _run_smoke_test_internal(
@@ -38,12 +43,22 @@ async def _run_smoke_test_internal(
     session_factory,
     *,
     progress_callback: Callable[[str], None] | None = None,
+    request_timeout_seconds: int | None = None,
 ) -> SmokeTestRunResult:
     _emit_progress(progress_callback, f"connect:start url={config.url}")
-    async with _create_session(session_factory, config.url, progress_callback=progress_callback) as session:
+    async with _create_session(
+        session_factory,
+        config.url,
+        progress_callback=progress_callback,
+        request_timeout_seconds=request_timeout_seconds,
+    ) as session:
         _emit_progress(progress_callback, "connect:ok")
         _emit_progress(progress_callback, "list_tools:start")
-        tools_response = await session.list_tools()
+        tools_response = await _call_session(
+            session.list_tools,
+            progress_callback=progress_callback,
+            stage="list_tools",
+        )
         tool_names = [tool.name for tool in getattr(tools_response, "tools", [])]
         _emit_progress(progress_callback, f"list_tools:ok count={len(tool_names)}")
 
@@ -53,7 +68,13 @@ async def _run_smoke_test_internal(
         metadata_ok = False
         for query in config.metadata_queries:
             _emit_progress(progress_callback, f"call_tool:start name={config.metadata_tool_name} query={query!r}")
-            result = await session.call_tool(config.metadata_tool_name, {config.metadata_query_argument: query})
+            result = await _call_session(
+                session.call_tool,
+                config.metadata_tool_name,
+                {config.metadata_query_argument: query},
+                progress_callback=progress_callback,
+                stage=f"{config.metadata_tool_name}({query})",
+            )
             if _result_has_content(result):
                 _emit_progress(progress_callback, f"call_tool:ok name={config.metadata_tool_name} query={query!r}")
                 metadata_ok = True
@@ -69,7 +90,13 @@ async def _run_smoke_test_internal(
             code_ok = False
             for query in config.code_queries:
                 _emit_progress(progress_callback, f"call_tool:start name={config.code_tool_name} query={query!r}")
-                result = await session.call_tool(config.code_tool_name, {config.code_query_argument: query})
+                result = await _call_session(
+                    session.call_tool,
+                    config.code_tool_name,
+                    {config.code_query_argument: query},
+                    progress_callback=progress_callback,
+                    stage=f"{config.code_tool_name}({query})",
+                )
                 if _result_has_content(result):
                     _emit_progress(progress_callback, f"call_tool:ok name={config.code_tool_name} query={query!r}")
                     code_ok = True
@@ -119,14 +146,29 @@ def _result_has_content(result: Any) -> bool:
     return False
 
 
-def _sdk_session_factory(url: str, *, progress_callback: Callable[[str], None] | None = None):
-    return _MCPStreamableHTTPSession(url, progress_callback=progress_callback)
+def _sdk_session_factory(
+    url: str,
+    *,
+    progress_callback: Callable[[str], None] | None = None,
+    request_timeout_seconds: int | None = None,
+):
+    return _MCPStreamableHTTPSession(
+        url,
+        progress_callback=progress_callback,
+        request_timeout_seconds=request_timeout_seconds,
+    )
 
 
 class _MCPStreamableHTTPSession:
-    def __init__(self, url: str, progress_callback: Callable[[str], None] | None = None) -> None:
+    def __init__(
+        self,
+        url: str,
+        progress_callback: Callable[[str], None] | None = None,
+        request_timeout_seconds: int | None = None,
+    ) -> None:
         self.url = _normalize_mcp_url(url)
         self.progress_callback = progress_callback
+        self.request_timeout_seconds = request_timeout_seconds
         self._transport_context = None
         self._session_context = None
         self._session = None
@@ -142,27 +184,45 @@ class _MCPStreamableHTTPSession:
 
         self._exit_stack = AsyncExitStack()
         await self._exit_stack.__aenter__()
+        timeout = httpx.Timeout(
+            connect=min(float(self.request_timeout_seconds or 30), 30.0),
+            read=None,
+            write=None,
+            pool=None,
+        )
         http_client = await self._exit_stack.enter_async_context(
-            httpx.AsyncClient(follow_redirects=True, timeout=20.0)
+            httpx.AsyncClient(follow_redirects=True, timeout=timeout)
         )
 
-        self._transport_context = streamable_http_client(self.url, http_client=http_client)
-        transport_values = await self._exit_stack.enter_async_context(self._transport_context)
-        if len(transport_values) >= 2:
-            read_stream, write_stream = transport_values[0], transport_values[1]
-        else:
-            raise SmokeTestError("Streamable HTTP client did not provide read/write streams.")
+        try:
+            self._transport_context = streamable_http_client(self.url, http_client=http_client)
+            transport_values = await self._exit_stack.enter_async_context(self._transport_context)
+            if len(transport_values) >= 2:
+                read_stream, write_stream = transport_values[0], transport_values[1]
+            else:
+                raise SmokeTestError("Streamable HTTP client did not provide read/write streams.")
 
-        self._session_context = ClientSession(read_stream, write_stream)
-        self._session = await self._exit_stack.enter_async_context(self._session_context)
-        _emit_progress(self.progress_callback, "initialize:start")
-        await self._session.initialize()
-        _emit_progress(self.progress_callback, "initialize:ok")
-        return self._session
+            self._session_context = ClientSession(read_stream, write_stream)
+            self._session = await self._exit_stack.enter_async_context(self._session_context)
+            _emit_progress(self.progress_callback, "initialize:start")
+            await self._session.initialize()
+            _emit_progress(self.progress_callback, "initialize:ok")
+            return self._session
+        except SmokeTestError:
+            await self._cleanup_on_failure()
+            raise
+        except Exception as exc:
+            await self._cleanup_on_failure()
+            raise SmokeTestError(f"MCP session initialization failed: {exc.__class__.__name__}: {exc}") from exc
 
     async def __aexit__(self, exc_type, exc, tb):
         if self._exit_stack is not None:
             await self._exit_stack.__aexit__(exc_type, exc, tb)
+
+    async def _cleanup_on_failure(self) -> None:
+        if self._exit_stack is not None:
+            await self._exit_stack.__aexit__(None, None, None)
+            self._exit_stack = None
 
 
 def _normalize_mcp_url(url: str) -> str:
@@ -182,10 +242,32 @@ def _default_progress_callback(message: str) -> None:
     print(f"[diagnostic] {message}", file=sys.stderr, flush=True)
 
 
-def _create_session(session_factory, url: str, *, progress_callback: Callable[[str], None] | None):
+def _create_session(
+    session_factory,
+    url: str,
+    *,
+    progress_callback: Callable[[str], None] | None,
+    request_timeout_seconds: int | None,
+):
     signature = inspect.signature(session_factory)
-    if "progress_callback" in signature.parameters or any(
+    supports_kwargs = any(
         parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()
-    ):
-        return session_factory(url, progress_callback=progress_callback)
+    )
+    kwargs = {}
+    if "progress_callback" in signature.parameters or supports_kwargs:
+        kwargs["progress_callback"] = progress_callback
+    if "request_timeout_seconds" in signature.parameters or supports_kwargs:
+        kwargs["request_timeout_seconds"] = request_timeout_seconds
+    if kwargs:
+        return session_factory(url, **kwargs)
     return session_factory(url)
+
+
+async def _call_session(callable_obj, *args, progress_callback: Callable[[str], None] | None, stage: str):
+    try:
+        return await callable_obj(*args)
+    except SmokeTestError:
+        raise
+    except Exception as exc:
+        _emit_progress(progress_callback, f"{stage}:error type={exc.__class__.__name__} message={exc}")
+        raise SmokeTestError(f"MCP request failed during {stage}: {exc.__class__.__name__}: {exc}") from exc

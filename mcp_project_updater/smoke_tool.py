@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
@@ -77,7 +78,7 @@ def run_tool_smoke_test(
 ) -> ToolSmokeRunResult:
     payload = build_tool_smoke_config_payload(config, tool_smoke_config, url=url)
     config_path = write_tool_smoke_config(config.paths.state_root / "tool-smoke-config.json", payload)
-    command = ["python", str(tool_smoke_config.tool_path), "--config", str(config_path)]
+    command = [sys.executable, str(tool_smoke_config.tool_path), "--config", str(config_path)]
     result = runner(command, working_directory)
     if result.returncode != 0:
         details = result.stderr.strip() or result.stdout.strip() or "Tool smoke-test failed."

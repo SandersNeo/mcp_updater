@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -62,7 +63,6 @@ def _write_config(tmp_path: Path) -> Path:
                 "enabled": True,
                 "timeoutSeconds": 60,
                 "checkIntervalSeconds": 5,
-                "httpReadyUrl": "http://localhost:18100/mcp",
                 "acceptableHttpStatusCodes": [200],
                 "requireChromaNotEmpty": True,
                 "logTailLines": 100,
@@ -121,7 +121,7 @@ def test_run_tool_smoke_test_invokes_cli(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0
-    assert calls[0][:2] == ["python", str(config.smoke_test.tool_smoke_test.tool_path)]
+    assert calls[0][:2] == [sys.executable, str(config.smoke_test.tool_smoke_test.tool_path)]
 
 
 def test_run_tool_smoke_test_raises_on_failure(tmp_path: Path) -> None:

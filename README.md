@@ -219,6 +219,14 @@ Infrastructure smoke-test не использует отдельный `httpRead
 "acceptableHttpStatusCodes": [200, 400, 404, 405]
 ```
 
+Для `smokeTest.infrastructure.logErrorPatterns` не стоит использовать слишком общий паттерн вроде `ERROR`.
+Некоторые MCP images пишут `ERROR` и в recoverable сценариях, например при fallback определения кодировки `Report.txt`, после чего продолжают нормальную индексацию.
+Безопаснее использовать более узкие признаки реальной аварии, например:
+
+```json
+"logErrorPatterns": ["Traceback", "Unhandled exception", "CRITICAL"]
+```
+
 Если в старом локальном конфиге ещё есть `smokeTest.infrastructure.httpReadyUrl`, updater его больше не использует. Источник истины для readiness URL — это `mcp.build.url` и `mcp.production.url`.
 
 ## Workflow update

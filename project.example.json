@@ -80,7 +80,7 @@
       "logErrorPatterns": [
         "Traceback",
         "Unhandled exception",
-        "ERROR"
+        "CRITICAL"
       ],
       "logReadyPatterns": [
         "Started",

@@ -29,6 +29,9 @@
   - `smokeTest.toolSmokeTest.toolPath`
 - Проверить `smokeTest.infrastructure.acceptableHttpStatusCodes`:
   - для MCP endpoint обычно нужно допустить не только `200`, но и `405`
+- Проверить `smokeTest.infrastructure.logErrorPatterns`:
+  - не использовать слишком общий паттерн `ERROR`
+  - для MCP container безопаснее узкие паттерны вроде `Traceback`, `Unhandled exception`, `CRITICAL`
 - Проверить, что `smokeTest.profile=production` только если `toolSmokeTest.enabled=true`
 
 ## 3. Dry Run

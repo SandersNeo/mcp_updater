@@ -92,6 +92,7 @@
       "toolPath": "C:/im/Devops/MCP Updater/mcp_smoke_test.py",
       "url": "http://localhost:18100/mcp",
       "timeoutSeconds": 60,
+      "diagnostic": false,
       "metadataToolName": "metadatasearch",
       "metadataQueryArgument": "query",
       "metadataQueries": [

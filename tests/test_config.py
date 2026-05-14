@@ -116,6 +116,7 @@ def _base_payload() -> dict:
                 "toolPath": "C:/tools/mcp_smoke_test.py",
                 "url": "http://localhost:18100/mcp",
                 "timeoutSeconds": 60,
+                "diagnostic": False,
                 "metadataToolName": "metadatasearch",
                 "metadataQueryArgument": "query",
                 "metadataQueries": ["Конфигурации"],
@@ -152,6 +153,7 @@ def test_load_project_config_defaults_and_validation(tmp_path: Path) -> None:
     assert config.smoke_test.profile == "dev"
     assert config.rollback.preserve_failed_index is True
     assert config.mcp.production.host_port == 8100
+    assert config.smoke_test.tool_smoke_test.diagnostic is False
 
 
 def test_profile_defaults_to_dev(tmp_path: Path) -> None:

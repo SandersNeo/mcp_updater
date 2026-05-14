@@ -16,6 +16,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--url", required=False, help="MCP server URL")
     parser.add_argument("--timeout", required=False, type=int, help="Timeout in seconds")
     parser.add_argument("--index-code", action="store_true", help="Require codesearch checks")
+    parser.add_argument("--diagnostic", action="store_true", help="Print progress diagnostics to stderr")
     parser.add_argument("--metadata-tool", default="metadatasearch")
     parser.add_argument("--metadata-query-argument", default="query")
     parser.add_argument("--metadata-query", action="append", default=[])
@@ -29,6 +30,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         config = _resolve_config(args)
+        if args.diagnostic:
+            config.diagnostic = True
         result = asyncio.run(run_smoke_test(config))
         print(json.dumps({"tools": result.listed_tools, "metadataOk": result.metadata_ok, "codeOk": result.code_ok}, ensure_ascii=False))
         return 0
@@ -51,6 +54,7 @@ def _resolve_config(args) -> SmokeToolConfig:
         url=args.url,
         timeout_seconds=args.timeout,
         index_code=bool(args.index_code),
+        diagnostic=bool(args.diagnostic),
         metadata_tool_name=args.metadata_tool,
         metadata_query_argument=args.metadata_query_argument,
         metadata_queries=list(args.metadata_query),

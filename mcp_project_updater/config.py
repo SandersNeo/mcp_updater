@@ -143,6 +143,7 @@ class ToolSmokeConfig:
     tool_path: Path
     url: str
     timeout_seconds: int
+    diagnostic: bool
     metadata_tool_name: str
     metadata_query_argument: str
     metadata_queries: list[str]
@@ -318,6 +319,7 @@ def _parse_project_config(raw: dict[str, Any], config_path: Path) -> ProjectConf
                 tool_path=_expect_path_string(tool_raw.get("toolPath"), "smokeTest.toolSmokeTest.toolPath"),
                 url=_expect_string(tool_raw.get("url"), "smokeTest.toolSmokeTest.url"),
                 timeout_seconds=_expect_int(tool_raw.get("timeoutSeconds"), "smokeTest.toolSmokeTest.timeoutSeconds"),
+                diagnostic=_expect_bool(tool_raw.get("diagnostic", False), "smokeTest.toolSmokeTest.diagnostic"),
                 metadata_tool_name=_expect_string(
                     tool_raw.get("metadataToolName", "metadatasearch"),
                     "smokeTest.toolSmokeTest.metadataToolName",

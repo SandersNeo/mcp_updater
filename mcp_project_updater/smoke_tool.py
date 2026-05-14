@@ -53,6 +53,7 @@ def build_tool_smoke_config_payload(
         "url": url or tool_smoke_config.url,
         "timeoutSeconds": tool_smoke_config.timeout_seconds,
         "indexCode": config.mcp.index_code,
+        "diagnostic": tool_smoke_config.diagnostic,
         "metadataToolName": tool_smoke_config.metadata_tool_name,
         "metadataQueryArgument": tool_smoke_config.metadata_query_argument,
         "metadataQueries": tool_smoke_config.metadata_queries,
@@ -88,7 +89,7 @@ def run_tool_smoke_test(
     else:
         result = runner(command, working_directory)
     if result.returncode != 0:
-        details = result.stdout.strip() or result.stderr.strip() or "Tool smoke-test failed."
+        details = _format_process_failure(result) or "Tool smoke-test failed."
         raise ToolSmokeTestError(details, ExitCode.BUILD_SMOKE_FAILED)
     return result
 
@@ -113,7 +114,7 @@ def _run_default_process_runner_with_timeout(
             command=list(command),
             returncode=13,
             stdout="MCP tool smoke-test timed out.",
-            stderr=exc.stderr or "",
+            stderr=_coerce_subprocess_output(exc.stderr) or _coerce_subprocess_output(exc.stdout),
         )
 
     return ToolSmokeRunResult(
@@ -122,3 +123,22 @@ def _run_default_process_runner_with_timeout(
         stdout=completed.stdout,
         stderr=completed.stderr,
     )
+
+
+def _format_process_failure(result: ToolSmokeRunResult) -> str:
+    parts = [part.strip() for part in (result.stdout, result.stderr) if part and part.strip()]
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0]
+    if parts[0] == parts[1]:
+        return parts[0]
+    return "\n".join(parts)
+
+
+def _coerce_subprocess_output(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value

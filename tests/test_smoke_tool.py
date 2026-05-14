@@ -75,6 +75,7 @@ def _write_config(tmp_path: Path) -> Path:
                 "toolPath": str(tool_path),
                 "url": "http://localhost:18100/mcp",
                 "timeoutSeconds": 60,
+                "diagnostic": True,
                 "metadataQueries": ["Конфигурации"],
                 "codeQueries": ["Процедура"],
             },
@@ -103,6 +104,7 @@ def test_build_tool_smoke_config_payload_uses_defaults(tmp_path: Path) -> None:
     assert payload["metadataQueryArgument"] == "query"
     assert payload["codeToolName"] == "codesearch"
     assert payload["codeQueryArgument"] == "query"
+    assert payload["diagnostic"] is True
 
 
 def test_run_tool_smoke_test_invokes_cli(tmp_path: Path) -> None:
@@ -154,4 +156,26 @@ def test_run_tool_smoke_test_reports_timeout_cleanly(tmp_path: Path, monkeypatch
             working_directory=config.repo.path,
         )
 
-    assert str(exc.value) == "MCP tool smoke-test timed out."
+    assert "MCP tool smoke-test timed out." in str(exc.value)
+
+
+def test_run_tool_smoke_test_includes_stderr_diagnostics_on_timeout(tmp_path: Path, monkeypatch) -> None:
+    config = load_project_config(_write_config(tmp_path))
+
+    def _fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(
+            cmd=kwargs.get("args", args[0] if args else "python"),
+            timeout=60,
+            stderr=b"[diagnostic] list_tools:start",
+        )
+
+    monkeypatch.setattr("mcp_project_updater.smoke_tool.subprocess.run", _fake_run)
+
+    with pytest.raises(ToolSmokeTestError) as exc:
+        run_tool_smoke_test(
+            config,
+            config.smoke_test.tool_smoke_test,
+            working_directory=config.repo.path,
+        )
+
+    assert "[diagnostic] list_tools:start" in str(exc.value)

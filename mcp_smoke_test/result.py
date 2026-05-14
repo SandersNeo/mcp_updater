@@ -8,6 +8,7 @@ class SmokeToolConfig:
     url: str
     timeout_seconds: int
     index_code: bool
+    diagnostic: bool
     metadata_tool_name: str
     metadata_query_argument: str
     metadata_queries: list[str]

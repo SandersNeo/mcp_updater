@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from mcp_smoke_test.client import SmokeTestError, load_smoke_config, run_smoke_test
+from mcp_smoke_test.client import SmokeTestError, _normalize_mcp_url, load_smoke_config, run_smoke_test
 from mcp_smoke_test.result import SmokeToolConfig
 
 
@@ -56,6 +56,7 @@ def test_load_smoke_config(tmp_path: Path) -> None:
                 "url": "http://localhost:18100/mcp",
                 "timeoutSeconds": 60,
                 "indexCode": True,
+                "diagnostic": True,
                 "metadataQueries": ["Конфигурации"],
                 "codeQueries": ["Процедура"],
             },
@@ -68,6 +69,7 @@ def test_load_smoke_config(tmp_path: Path) -> None:
 
     assert config.metadata_tool_name == "metadatasearch"
     assert config.code_tool_name == "codesearch"
+    assert config.diagnostic is True
 
 
 def test_run_smoke_test_success() -> None:
@@ -75,6 +77,7 @@ def test_run_smoke_test_success() -> None:
         url="http://localhost:18100/mcp",
         timeout_seconds=5,
         index_code=True,
+        diagnostic=False,
         metadata_tool_name="metadatasearch",
         metadata_query_argument="query",
         metadata_queries=["Конфигурации"],
@@ -106,6 +109,7 @@ def test_run_smoke_test_fails_when_tool_missing() -> None:
         url="http://localhost:18100/mcp",
         timeout_seconds=5,
         index_code=False,
+        diagnostic=False,
         metadata_tool_name="metadatasearch",
         metadata_query_argument="query",
         metadata_queries=["Конфигурации"],
@@ -122,3 +126,43 @@ def test_run_smoke_test_fails_when_tool_missing() -> None:
 
     with pytest.raises(SmokeTestError):
         asyncio.run(_run())
+
+
+def test_normalize_mcp_url_adds_trailing_slash_for_mcp_path() -> None:
+    assert _normalize_mcp_url("http://localhost:18100/mcp") == "http://localhost:18100/mcp/"
+    assert _normalize_mcp_url("http://localhost:18100/mcp/") == "http://localhost:18100/mcp/"
+
+
+def test_run_smoke_test_emits_diagnostics(capsys: pytest.CaptureFixture[str]) -> None:
+    config = SmokeToolConfig(
+        url="http://localhost:18100/mcp",
+        timeout_seconds=5,
+        index_code=True,
+        diagnostic=True,
+        metadata_tool_name="metadatasearch",
+        metadata_query_argument="query",
+        metadata_queries=["metadata"],
+        code_tool_name="codesearch",
+        code_query_argument="query",
+        code_queries=["code"],
+    )
+
+    async def _run():
+        return await run_smoke_test(
+            config,
+            session_factory=lambda url: _FakeSession(
+                ["metadatasearch", "codesearch"],
+                {
+                    ("metadatasearch", "metadata"): _FakeResult([_FakeText("ok")]),
+                    ("codesearch", "code"): _FakeResult([_FakeText("ok")]),
+                },
+            ),
+        )
+
+    result = asyncio.run(_run())
+    captured = capsys.readouterr()
+
+    assert result.metadata_ok is True
+    assert result.code_ok is True
+    assert "[diagnostic] list_tools:start" in captured.err
+    assert "[diagnostic] call_tool:ok name=metadatasearch query='metadata'" in captured.err

@@ -189,6 +189,7 @@ python .\mcp_smoke_test.py --config .\project.json
 - code tool, по умолчанию `codesearch`
 
 Названия tools и имена аргументов настраиваются в `smokeTest.toolSmokeTest`.
+Для временной диагностики можно включить `smokeTest.toolSmokeTest.diagnostic=true`: тогда `mcp_smoke_test.py` будет писать в `stderr`, на каком шаге он находится (`connect`, `initialize`, `list_tools`, `call_tool`).
 
 ## Infrastructure Smoke Configuration
 

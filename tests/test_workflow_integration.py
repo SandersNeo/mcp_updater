@@ -44,6 +44,7 @@ def test_run_update_integration_updates_state_and_current_artifacts(tmp_path: Pa
     monkeypatch.setenv("ONERPA_LICENSE_KEY", "secret-value")
 
     fake_runner = FakeDockerRunner()
+    monkeypatch.setattr("mcp_project_updater.cli.ensure_repo_available", lambda repo, no_git_pull: None)
     monkeypatch.setattr("mcp_project_updater.cli.validate_repo", _fake_repo_validation)
     monkeypatch.setattr("mcp_project_updater.cli.determine_target_commit", lambda *args, **kwargs: "commit-001")
     monkeypatch.setattr("mcp_project_updater.cli.run_parser", _fake_run_parser)

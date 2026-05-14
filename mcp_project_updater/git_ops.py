@@ -56,6 +56,28 @@ def ensure_repo_available(
     env: dict[str, str] | None = None,
 ) -> None:
     if repo.path.exists():
+        if _is_git_repository(repo.path, runner):
+            return
+
+        if no_git_pull:
+            raise GitOperationError(
+                f"Repository path exists but is not a Git repository and '--no-git-pull' forbids cloning: {repo.path}",
+                ExitCode.GIT_REPOSITORY_NOT_FOUND,
+            )
+
+        if not repo.clone_url:
+            raise GitOperationError(
+                f"Repository path exists but is not a Git repository and no clone URL is configured: {repo.path}",
+                ExitCode.GIT_REPOSITORY_NOT_FOUND,
+            )
+
+        if any(repo.path.iterdir()):
+            raise GitOperationError(
+                f"Repository path exists but is not a Git repository and is not empty: {repo.path}",
+                ExitCode.GIT_REPOSITORY_NOT_FOUND,
+            )
+
+        _clone_repo(repo, runner=runner, env=env)
         return
 
     if no_git_pull:
@@ -70,21 +92,7 @@ def ensure_repo_available(
             ExitCode.GIT_REPOSITORY_NOT_FOUND,
         )
 
-    repo.path.parent.mkdir(parents=True, exist_ok=True)
-    command = _with_auth_options(
-        [
-            "git",
-            "clone",
-            "--branch",
-            repo.branch,
-            "--single-branch",
-            repo.clone_url,
-            str(repo.path),
-        ],
-        repo.auth,
-        env=env,
-    )
-    _run_git(repo.path.parent, command, runner, ExitCode.GIT_PULL_FAILED)
+    _clone_repo(repo, runner=runner, env=env)
 
 
 def validate_repo(repo_path: Path, runner: CommandRunner = default_command_runner) -> RepoValidationResult:
@@ -188,3 +196,31 @@ def _run_git(repo_path: Path, command: Sequence[str], runner: CommandRunner, err
         details = stderr or stdout or "Git command failed."
         raise GitOperationError(details, error_code)
     return result
+
+
+def _is_git_repository(repo_path: Path, runner: CommandRunner) -> bool:
+    result = runner(["git", "rev-parse", "--is-inside-work-tree"], repo_path)
+    return result.returncode == 0 and result.stdout.strip().lower() == "true"
+
+
+def _clone_repo(
+    repo: RepoConfig,
+    *,
+    runner: CommandRunner,
+    env: dict[str, str] | None,
+) -> None:
+    repo.path.parent.mkdir(parents=True, exist_ok=True)
+    command = _with_auth_options(
+        [
+            "git",
+            "clone",
+            "--branch",
+            repo.branch,
+            "--single-branch",
+            repo.clone_url,
+            str(repo.path),
+        ],
+        repo.auth,
+        env=env,
+    )
+    _run_git(repo.path.parent, command, runner, ExitCode.GIT_PULL_FAILED)

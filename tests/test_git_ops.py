@@ -88,6 +88,61 @@ def test_ensure_repo_available_clones_missing_repo(tmp_path: Path) -> None:
     ]
 
 
+def test_ensure_repo_available_returns_for_existing_git_repo(tmp_path: Path) -> None:
+    repo = _repo(tmp_path / "repo")
+    repo.path.mkdir()
+    calls = []
+
+    def runner(command, cwd):
+        calls.append((command, cwd))
+        if command[2] == "--is-inside-work-tree":
+            return CommandResult(0, "true\n", "")
+        return CommandResult(0, "", "")
+
+    ensure_repo_available(repo, no_git_pull=False, runner=runner)
+
+    assert calls == [(["git", "rev-parse", "--is-inside-work-tree"], repo.path)]
+
+
+def test_ensure_repo_available_clones_into_existing_empty_directory(tmp_path: Path) -> None:
+    repo = _repo(tmp_path / "repo")
+    repo.path.mkdir()
+    calls = []
+
+    def runner(command, cwd):
+        calls.append((command, cwd))
+        if command[2] == "--is-inside-work-tree":
+            return CommandResult(128, "", "fatal: not a git repository")
+        return CommandResult(0, "", "")
+
+    ensure_repo_available(repo, no_git_pull=False, runner=runner)
+
+    assert calls == [
+        (["git", "rev-parse", "--is-inside-work-tree"], repo.path),
+        (
+            ["git", "clone", "--branch", "master", "--single-branch", "https://gitlab.example.com/team/orders.git", str(repo.path)],
+            repo.path.parent,
+        ),
+    ]
+
+
+def test_ensure_repo_available_rejects_existing_non_git_non_empty_directory(tmp_path: Path) -> None:
+    repo = _repo(tmp_path / "repo")
+    repo.path.mkdir()
+    (repo.path / "junk.txt").write_text("x", encoding="utf-8")
+
+    def runner(command, cwd):
+        if command[2] == "--is-inside-work-tree":
+            return CommandResult(128, "", "fatal: not a git repository")
+        return CommandResult(0, "", "")
+
+    with pytest.raises(GitOperationError) as exc:
+        ensure_repo_available(repo, no_git_pull=False, runner=runner)
+
+    assert exc.value.exit_code == ExitCode.GIT_REPOSITORY_NOT_FOUND
+    assert "is not empty" in str(exc.value)
+
+
 def test_ensure_repo_available_rejects_missing_repo_with_no_git_pull(tmp_path: Path) -> None:
     repo = _repo(tmp_path / "repo")
 

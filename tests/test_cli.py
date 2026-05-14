@@ -239,6 +239,10 @@ def _mock_phase2_dependencies(
     complete_phase6: bool = False,
 ) -> None:
     monkeypatch.setattr(
+        "mcp_project_updater.cli.ensure_repo_available",
+        lambda repo, no_git_pull: None,
+    )
+    monkeypatch.setattr(
         "mcp_project_updater.cli.validate_repo",
         lambda repo_path: RepoValidationResult(
             inside_work_tree=True,

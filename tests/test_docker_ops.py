@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -8,6 +9,7 @@ from mcp_project_updater.constants import ExitCode
 from mcp_project_updater.docker_ops import (
     DockerCommandResult,
     DockerOperationError,
+    default_docker_runner,
     ensure_docker_available,
     inspect_container,
     read_container_logs,
@@ -46,3 +48,19 @@ def test_read_container_logs_returns_combined_output() -> None:
     )
 
     assert logs == "helloworld"
+
+
+def test_default_docker_runner_decodes_non_cp1251_bytes(monkeypatch, tmp_path: Path) -> None:
+    def _fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args[0] if args else kwargs.get("args"),
+            returncode=0,
+            stdout=b"hello\x98world",
+            stderr=b"",
+        )
+
+    monkeypatch.setattr("mcp_project_updater.docker_ops.subprocess.run", _fake_run)
+
+    result = default_docker_runner(["docker", "version"], tmp_path)
+
+    assert result.stdout == "hello\ufffdworld"

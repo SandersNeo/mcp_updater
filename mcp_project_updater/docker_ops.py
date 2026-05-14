@@ -29,13 +29,12 @@ def default_docker_runner(command: Sequence[str], cwd: Path) -> DockerCommandRes
         list(command),
         cwd=str(cwd),
         capture_output=True,
-        text=True,
         check=False,
     )
     return DockerCommandResult(
         returncode=completed.returncode,
-        stdout=completed.stdout,
-        stderr=completed.stderr,
+        stdout=_coerce_subprocess_output(completed.stdout),
+        stderr=_coerce_subprocess_output(completed.stderr),
     )
 
 
@@ -128,3 +127,11 @@ def _render_error(result: DockerCommandResult, fallback: str) -> str:
     stderr = result.stderr.strip()
     stdout = result.stdout.strip()
     return stderr or stdout or fallback
+
+
+def _coerce_subprocess_output(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value

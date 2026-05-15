@@ -130,6 +130,28 @@ def test_parse_args() -> None:
     assert options.config_path.name == "project.json"
     assert options.force is True
     assert options.dry_run is True
+    assert options.promote_existing_build is False
+
+
+def test_parse_args_promote_existing_build() -> None:
+    options = parse_args(
+        [
+            "--config",
+            "project.json",
+            "--promote-existing-build",
+            "--promote-commit",
+            "abc123",
+            "--promote-source-fingerprint",
+            "fp",
+            "--promote-report-hash",
+            "hash",
+        ]
+    )
+
+    assert options.promote_existing_build is True
+    assert options.promote_commit == "abc123"
+    assert options.promote_source_fingerprint == "fp"
+    assert options.promote_report_hash == "hash"
 
 
 def test_main_dry_run_returns_success(tmp_path: Path, monkeypatch) -> None:
@@ -167,6 +189,54 @@ def test_main_returns_success_when_no_changes_and_not_forced(tmp_path: Path, mon
     result = main(["--config", str(config_path)])
 
     assert result == ExitCode.SUCCESS
+
+
+def test_main_promotes_existing_build(tmp_path: Path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    build_report = tmp_path / "staging" / "build" / "metadata" / "Report.txt"
+    build_report.parent.mkdir(parents=True)
+    build_report.write_text(
+        '\t- РљРѕРЅС„РёРіСѓСЂР°С†РёРё.Orders\nРРјСЏ: "Orders"\nРЎРёРЅРѕРЅРёРј: "Orders"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "staging" / "build" / "diagnostics").mkdir(parents=True)
+    (tmp_path / "chroma" / "build").mkdir(parents=True)
+
+    called = {"switch_commit": None}
+    _mock_phase2_dependencies(monkeypatch, complete_phase4=True, complete_phase5=True)
+    monkeypatch.setattr("mcp_project_updater.cli.ensure_docker_available", lambda: "26.1.0")
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.perform_switch",
+        lambda config, state_store, target_commit, production_log_path, docker_runner: called.__setitem__("switch_commit", target_commit)
+        or type("SwitchResult", (), {"target_commit": target_commit, "production_log_path": production_log_path})(),
+    )
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.validate_report",
+        lambda report_path, report_config, diagnostics_path: type(
+            "ReportResult",
+            (),
+            {"report_path": report_path, "report_size": report_path.stat().st_size},
+        )(),
+    )
+
+    result = main(
+        [
+            "--config",
+            str(config_path),
+            "--promote-existing-build",
+            "--promote-commit",
+            "promoted-commit",
+            "--promote-source-fingerprint",
+            "source-fp",
+            "--promote-report-hash",
+            "report-hash",
+        ]
+    )
+
+    assert result == ExitCode.SUCCESS
+    assert called["switch_commit"] == "promoted-commit"
+    assert (tmp_path / "state" / "last_source_fingerprint").read_text(encoding="utf-8").strip() == "source-fp"
+    assert (tmp_path / "state" / "last_report_hash").read_text(encoding="utf-8").strip() == "report-hash"
 
 
 def test_main_returns_success_when_source_fingerprint_matches_and_not_forced(tmp_path: Path, monkeypatch) -> None:

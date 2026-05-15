@@ -147,7 +147,42 @@ python .\update_mcp_project.py --config .\project.json --rollback --verbose
 - `state/current_commit` и `state/previous_commit` поменялись местами
 - `state/last_indexed_commit` не изменился автоматически
 
-## 10. Failure and Automatic Rollback Drill
+## 10. Promote Existing Build Scenario
+
+Использовать этот сценарий, если updater завершился по `toolSmokeTest.timeoutSeconds`, но build container продолжил long-running индексацию.
+
+Подготовка:
+
+- убедиться, что `staging/build` существует
+- убедиться, что `chroma/build` существует
+- убедиться, что build container всё ещё доступен по `mcp.build.url`
+- дождаться в build log строки `Phase 2/3 (code) done` или `Background indexing: phase 'code' completed`
+- взять из failed update log `Target commit`, `Source fingerprint` и `Report hash`
+
+Запустить:
+
+```powershell
+python .\update_mcp_project.py `
+  --config .\project.json `
+  --promote-existing-build `
+  --promote-commit <target_commit_from_log> `
+  --promote-source-fingerprint <source_fingerprint_from_log> `
+  --promote-report-hash <report_hash_from_log> `
+  --verbose
+```
+
+Проверить:
+
+- build infrastructure smoke-test прошёл по `mcp.build.url`
+- build MCP tool smoke-test прошёл по `mcp.build.url`
+- `staging/build` стал `staging/current`
+- `chroma/build` стал `chroma/current`
+- production container стартовал
+- production smoke-test прошёл по `mcp.production.url`
+- `state/current_commit` и `state/last_indexed_commit` равны promoted commit
+- `state/last_source_fingerprint` и `state/last_report_hash` записаны
+
+## 11. Failure and Automatic Rollback Drill
 
 Для controlled drill искусственно сломать production smoke-test:
 
@@ -164,7 +199,7 @@ python .\update_mcp_project.py --config .\project.json --rollback --verbose
 - при `rollback.preserveFailedIndex=true` сохраняется `failed-<timestamp>`
 - отправляется failure/rollback notification, если они включены
 
-## 11. Exit Codes
+## 12. Exit Codes
 
 Проверить руками хотя бы эти сценарии:
 
@@ -176,7 +211,7 @@ python .\update_mcp_project.py --config .\project.json --rollback --verbose
 - `15` — production smoke-test failed
 - `16` — rollback failed
 
-## 12. Sign-Off
+## 13. Sign-Off
 
 Готово к боевому использованию, если:
 

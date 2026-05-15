@@ -62,6 +62,10 @@ python .\update_mcp_project.py --config .\project.json
 - `--force` — переиндексировать даже если `target_commit == last_indexed_commit`
 - `--no-git-pull` — использовать текущий `HEAD` без `fetch/pull`
 - `--rollback` — выполнить manual rollback `current <-> previous`
+- `--promote-existing-build` — принять уже существующий `staging/build` и `chroma/build` без повторного parser/build этапа
+- `--promote-commit` — явно задать commit, который будет записан в state при `--promote-existing-build`
+- `--promote-source-fingerprint` — явно задать source fingerprint для state при `--promote-existing-build`
+- `--promote-report-hash` — явно задать report hash для state при `--promote-existing-build`
 - `--verbose` — более подробный лог
 - `--dry-run` — только валидация и расчёт плана без parser/docker/switch
 
@@ -265,6 +269,42 @@ Updater использует два уровня пропуска/оптимиз
 - в этом режиме build стартует не с пустого `chroma/build`, а с копии `chroma/current`
 - build container запускается с `RESET_DATABASE=false` и `INDEX_METADATA=false`
 - это позволяет не переиндексировать `metadatasearch`, если изменилась только code-часть
+
+## Promote Existing Build
+
+`--promote-existing-build` нужен для длинных initial builds, когда updater уже завершился по timeout, но build container продолжил индексацию и позже дошёл до готового состояния.
+
+Режим не запускает parser, не пересоздаёт `staging/build`, не очищает `chroma/build` и не стартует новый build container. Он:
+
+- проверяет существующие `staging/build` и `chroma/build`
+- валидирует `staging/build/metadata/Report.txt`
+- прогоняет build infrastructure smoke-test по `mcp.build.url`
+- прогоняет build MCP tool smoke-test по `mcp.build.url`, если он включён
+- сохраняет build container log
+- выполняет штатный switch `build -> current`
+- поднимает production container
+- прогоняет production smoke-test по `mcp.production.url`
+- записывает `current_commit`, `last_indexed_commit`, `last_source_fingerprint`, `last_report_hash`
+
+Перед запуском нужно дождаться завершения code phase в build log:
+
+```powershell
+docker logs --tail 300 mcp-orders-build 2>&1 | Select-String -Pattern "Phase 2/3 \(code\) done|Background indexing: phase 'code' completed|code progress"
+```
+
+После этого можно принять build:
+
+```powershell
+python .\update_mcp_project.py `
+  --config .\project.orders.json `
+  --promote-existing-build `
+  --promote-commit 4315fdf7efb6e1f09876561150f7dc0390ea6b44 `
+  --promote-source-fingerprint 904308bd3eb4b34dcaf502cc84c64f7043e5138cc972e851011d4697303ab914 `
+  --promote-report-hash 24951b4aea3aca150414ff08809755a4d59dd8d83ca5ab331a8ee4e919b0db1c `
+  --verbose
+```
+
+Если `--promote-commit`, `--promote-source-fingerprint` или `--promote-report-hash` не указаны, updater вычислит их из текущего Git checkout и существующего `Report.txt`. Для восстановления после timeout надёжнее передавать значения из failed update log, чтобы state точно соответствовал уже построенному build.
 
 ## Workflow rollback
 

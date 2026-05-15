@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .config import ProjectConfig, load_project_config
-from .constants import ExitCode
+from .constants import ExitCode, REPORT_FILE_NAME
 from .docker_ops import default_docker_runner, ensure_docker_available, write_container_logs
 from .fingerprints import compute_report_hash, compute_source_fingerprint
 from .git_ops import determine_target_commit, ensure_repo_available, validate_repo
@@ -20,7 +20,7 @@ from .rollback import perform_manual_rollback
 from .smoke_infrastructure import InfrastructureSmokeContext, run_infrastructure_smoke_test
 from .smoke_tool import run_tool_smoke_test
 from .source_detector import SourceDetectionResult, detect_sources
-from .staging import generate_parser_config, prepare_build_code_directory, prepare_build_staging, write_parser_config
+from .staging import BuildPaths, generate_parser_config, prepare_build_code_directory, prepare_build_staging, write_parser_config
 from .state import StateSnapshot, StateStore
 from .switcher import perform_switch, run_production_smoke_test
 from .errors import UpdaterError
@@ -30,11 +30,15 @@ from .logging_setup import setup_logging
 @dataclass(slots=True)
 class CliOptions:
     config_path: Path
-    force: bool
-    no_git_pull: bool
-    rollback: bool
-    verbose: bool
-    dry_run: bool
+    force: bool = False
+    no_git_pull: bool = False
+    rollback: bool = False
+    promote_existing_build: bool = False
+    promote_commit: str | None = None
+    promote_source_fingerprint: str | None = None
+    promote_report_hash: str | None = None
+    verbose: bool = False
+    dry_run: bool = False
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -42,7 +46,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", required=True, help="Path to project.json")
     parser.add_argument("--force", action="store_true", help="Reindex the current commit even if unchanged.")
     parser.add_argument("--no-git-pull", action="store_true", help="Use current HEAD without git fetch/pull.")
-    parser.add_argument("--rollback", action="store_true", help="Run manual rollback current <-> previous.")
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument("--rollback", action="store_true", help="Run manual rollback current <-> previous.")
+    mode_group.add_argument(
+        "--promote-existing-build",
+        action="store_true",
+        help="Accept existing staging/build and chroma/build without rerunning parser or starting a new build container.",
+    )
+    parser.add_argument("--promote-commit", help="Commit to record when promoting an existing build.")
+    parser.add_argument("--promote-source-fingerprint", help="Source fingerprint to record when promoting an existing build.")
+    parser.add_argument("--promote-report-hash", help="Report hash to record when promoting an existing build.")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging.")
     parser.add_argument("--dry-run", action="store_true", help="Validate config and show planned actions.")
     return parser
@@ -55,6 +68,10 @@ def parse_args(argv: Sequence[str] | None = None) -> CliOptions:
         force=namespace.force,
         no_git_pull=namespace.no_git_pull,
         rollback=namespace.rollback,
+        promote_existing_build=namespace.promote_existing_build,
+        promote_commit=namespace.promote_commit,
+        promote_source_fingerprint=namespace.promote_source_fingerprint,
+        promote_report_hash=namespace.promote_report_hash,
         verbose=namespace.verbose,
         dry_run=namespace.dry_run,
     )
@@ -83,7 +100,7 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
     lock_manager = LockManager(
         state_store.lock_path,
         config.project,
-        "rollback" if options.rollback else ("dry-run" if options.dry_run else "update"),
+        "rollback" if options.rollback else ("promote" if options.promote_existing_build else ("dry-run" if options.dry_run else "update")),
     )
 
     lock_manager.acquire()
@@ -101,6 +118,14 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
         if options.rollback:
             return run_rollback(
                 config,
+                state_store,
+                log_path=log_path,
+                last_indexed_commit_at_start=last_indexed_commit_at_start,
+            )
+        if options.promote_existing_build:
+            return run_promote_existing_build(
+                config,
+                options,
                 state_store,
                 log_path=log_path,
                 last_indexed_commit_at_start=last_indexed_commit_at_start,
@@ -338,6 +363,111 @@ def run_rollback(
     )
 
 
+def run_promote_existing_build(
+    config: ProjectConfig,
+    options: CliOptions,
+    state_store: StateStore,
+    *,
+    log_path: Path,
+    last_indexed_commit_at_start: str | None,
+) -> int:
+    logger = logging.getLogger(__name__)
+    stage = "promote_existing_build"
+
+    build_root = config.paths.staging_root / "build"
+    build_paths = _existing_build_paths(config)
+    build_chroma = config.paths.chroma_root / "build"
+    if not build_root.exists() or not build_chroma.exists():
+        raise UpdaterError("Existing build artifacts are missing; cannot promote staging/build.", ExitCode.PRODUCTION_SWITCH_FAILED)
+
+    ensure_repo_available(config.repo, no_git_pull=options.no_git_pull)
+    target_commit = options.promote_commit or determine_target_commit(config.repo, no_git_pull=options.no_git_pull)
+    source_fingerprint = options.promote_source_fingerprint
+    if source_fingerprint is None:
+        source_result = detect_sources(
+            config.repo.path,
+            config.sources.main_config_path,
+            config.sources.main_config_required,
+            config.sources.extension_path,
+            config.sources.extension_required,
+        )
+        source_fingerprint = compute_source_fingerprint(source_result)
+
+    report_result = validate_report(
+        build_paths.report_path,
+        config.smoke_test.report_validation,
+        build_paths.diagnostics,
+    )
+    report_hash = options.promote_report_hash or compute_report_hash(report_result.report_path)
+
+    logger.info("Promoting existing build for commit: %s", target_commit)
+    logger.info("Existing build report: %s (%s bytes)", report_result.report_path, report_result.report_size)
+    logger.info("Source fingerprint: %s", source_fingerprint)
+    logger.info("Report hash: %s", report_hash)
+
+    if options.dry_run:
+        logger.info("Dry-run mode enabled. Existing build promotion is skipped.")
+        return ExitCode.SUCCESS
+
+    docker_version = ensure_docker_available()
+    logger.info("Docker available: %s", docker_version)
+
+    smoke_result = run_infrastructure_smoke_test(
+        config.smoke_test.infrastructure,
+        InfrastructureSmokeContext(
+            container_name=config.mcp.build.container_name,
+            host_port=config.mcp.build.host_port,
+            url=config.mcp.build.url,
+            chroma_path=build_chroma,
+        ),
+        runner=default_docker_runner,
+    )
+    logger.info("Existing build infrastructure smoke-test passed with HTTP status %s", smoke_result.http_status_code)
+
+    if config.smoke_test.tool_smoke_test.enabled:
+        tool_smoke_result = run_tool_smoke_test(
+            config,
+            config.smoke_test.tool_smoke_test,
+            working_directory=config.repo.path,
+            url=config.mcp.build.url,
+        )
+        logger.info("Existing build tool smoke-test passed: %s", tool_smoke_result.stdout.strip() or "<no output>")
+    else:
+        logger.warning("Existing build MCP tool smoke-test skipped")
+
+    build_log_path = _derive_related_log_path(log_path, "mcp-build")
+    write_container_logs(config.mcp.build.container_name, build_log_path, runner=default_docker_runner)
+    logger.info("Saved existing build container logs: %s", build_log_path)
+
+    production_log_path = _derive_related_log_path(log_path, "mcp-production")
+    switch_result = perform_switch(
+        config,
+        state_store,
+        target_commit,
+        production_log_path,
+        docker_runner=default_docker_runner,
+    )
+    logger.info("Existing build promoted to production for commit %s", switch_result.target_commit)
+    state_store.write_last_source_fingerprint(source_fingerprint)
+    state_store.write_last_report_hash(report_hash)
+
+    return _handle_success_notification_and_cleanup(
+        config,
+        NotificationPayload(
+            project=config.project,
+            status="success",
+            stage=stage,
+            targetCommit=target_commit,
+            lastIndexedCommit=state_store.read_last_indexed_commit(),
+            productionUntouched=False,
+            rollbackAttempted=False,
+            rollbackSuccess=None,
+            logPath=str(log_path),
+        ),
+        log_path=log_path,
+    )
+
+
 def _log_dry_run_summary(
     logger: logging.Logger,
     config: ProjectConfig,
@@ -375,6 +505,26 @@ def _derive_related_log_path(update_log_path: Path, suffix: str) -> Path:
     if file_name.endswith("-update.log"):
         return update_log_path.with_name(file_name.replace("-update.log", f"-{suffix}.log"))
     return update_log_path.with_name(f"{update_log_path.stem}-{suffix}.log")
+
+
+def _existing_build_paths(config: ProjectConfig) -> BuildPaths:
+    build_root = config.paths.staging_root / "build"
+    metadata = build_root / "metadata"
+    code = build_root / "code"
+    diagnostics = build_root / "diagnostics"
+    logs = build_root / "logs"
+    settings = build_root / "settings"
+    return BuildPaths(
+        root=build_root,
+        metadata=metadata,
+        code=code,
+        diagnostics=diagnostics,
+        logs=logs,
+        settings=settings,
+        parser_config_path=build_root / "parser-config.json",
+        report_path=metadata / REPORT_FILE_NAME,
+        generator_settings_path=settings / f"{config.project}.xml-overrides.json",
+    )
 
 
 def _handle_success_notification_and_cleanup(

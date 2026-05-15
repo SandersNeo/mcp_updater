@@ -299,6 +299,8 @@ Updater использует два уровня пропуска/оптимиз
 - прогоняет production smoke-test по `mcp.production.url`
 - записывает `current_commit`, `last_indexed_commit`, `last_source_fingerprint`, `last_report_hash`
 
+Для уже долго работающего build-контейнера `logReadyPatterns` на build infrastructure smoke-test в этом режиме не используются: ready-marker вроде `Application startup complete` мог давно уйти из tail docker logs. Готовность build подтверждается HTTP/chroma checks и последующим MCP tool smoke-test. Production smoke-test после switch продолжает использовать обычные `logReadyPatterns`.
+
 Перед запуском нужно дождаться завершения code phase в build log:
 
 ```powershell

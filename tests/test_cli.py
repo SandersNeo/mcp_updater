@@ -202,7 +202,7 @@ def test_main_promotes_existing_build(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / "staging" / "build" / "diagnostics").mkdir(parents=True)
     (tmp_path / "chroma" / "build").mkdir(parents=True)
 
-    called = {"switch_commit": None}
+    called = {"switch_commit": None, "ready_patterns": None}
     _mock_phase2_dependencies(monkeypatch, complete_phase4=True, complete_phase5=True)
     monkeypatch.setattr("mcp_project_updater.cli.ensure_docker_available", lambda: "26.1.0")
     monkeypatch.setattr(
@@ -217,6 +217,11 @@ def test_main_promotes_existing_build(tmp_path: Path, monkeypatch) -> None:
             (),
             {"report_path": report_path, "report_size": report_path.stat().st_size},
         )(),
+    )
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.run_infrastructure_smoke_test",
+        lambda smoke_config, context, runner: called.__setitem__("ready_patterns", smoke_config.log_ready_patterns)
+        or type("SmokeResult", (), {"http_status_code": 405})(),
     )
 
     result = main(
@@ -235,6 +240,7 @@ def test_main_promotes_existing_build(tmp_path: Path, monkeypatch) -> None:
 
     assert result == ExitCode.SUCCESS
     assert called["switch_commit"] == "promoted-commit"
+    assert called["ready_patterns"] == []
     assert (tmp_path / "state" / "last_source_fingerprint").read_text(encoding="utf-8").strip() == "source-fp"
     assert (tmp_path / "state" / "last_report_hash").read_text(encoding="utf-8").strip() == "report-hash"
 

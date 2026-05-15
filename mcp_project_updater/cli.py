@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Sequence
 
@@ -412,8 +412,9 @@ def run_promote_existing_build(
     docker_version = ensure_docker_available()
     logger.info("Docker available: %s", docker_version)
 
+    existing_build_smoke_config = replace(config.smoke_test.infrastructure, log_ready_patterns=[])
     smoke_result = run_infrastructure_smoke_test(
-        config.smoke_test.infrastructure,
+        existing_build_smoke_config,
         InfrastructureSmokeContext(
             container_name=config.mcp.build.container_name,
             host_port=config.mcp.build.host_port,

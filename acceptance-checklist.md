@@ -175,6 +175,7 @@ python .\update_mcp_project.py `
 
 - build infrastructure smoke-test прошёл по `mcp.build.url`
 - build MCP tool smoke-test прошёл по `mcp.build.url`
+- build infrastructure smoke-test в этом режиме не требует `logReadyPatterns`, потому что ready-marker мог уйти из tail docker logs
 - `staging/build` стал `staging/current`
 - `chroma/build` стал `chroma/current`
 - production container стартовал

@@ -1,7 +1,7 @@
 {
   "project": "orders",
   "repo": {
-    "path": "C:/mcp-updater-data/repos/orders",
+    "path": "C:/mcp-updater-data/orders/repo",
     "branch": "master",
     "remote": "origin",
     "pullMode": "ff-only",

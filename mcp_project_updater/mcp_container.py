@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,8 +12,8 @@ from .staging import BuildPaths
 
 
 class MissingSecretEnvError(UpdaterError):
-    def __init__(self, env_name: str) -> None:
-        super().__init__(f"Required secret environment variable is missing: {env_name}", ExitCode.MISSING_REQUIRED_SECRET)
+    def __init__(self, secret_name: str) -> None:
+        super().__init__(f"Required secret is missing from secrets files: {secret_name}", ExitCode.MISSING_REQUIRED_SECRET)
 
 
 @dataclass(slots=True)
@@ -40,12 +39,12 @@ def prepare_chroma_build(chroma_root: Path, *, seed_source: Path | None = None) 
     return build_path
 
 
-def resolve_secret_environment(secret_env_mapping: dict[str, str]) -> dict[str, str]:
+def resolve_secret_environment(secret_env_mapping: dict[str, str], secrets: dict[str, str]) -> dict[str, str]:
     resolved: dict[str, str] = {}
-    for container_var, source_env_name in secret_env_mapping.items():
-        value = os.getenv(source_env_name)
+    for container_var, source_secret_name in secret_env_mapping.items():
+        value = secrets.get(source_secret_name)
         if value is None or value == "":
-            raise MissingSecretEnvError(source_env_name)
+            raise MissingSecretEnvError(source_secret_name)
         resolved[container_var] = value
     return resolved
 
@@ -68,7 +67,7 @@ def build_runtime_container_command(
     index_code: bool,
     index_help: bool,
 ) -> list[str]:
-    resolved_secret_env = resolve_secret_environment(mcp_config.secret_env)
+    resolved_secret_env = resolve_secret_environment(mcp_config.secret_env, mcp_config.secrets)
     container_env = build_container_environment(
         mcp_config,
         {

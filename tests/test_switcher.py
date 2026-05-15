@@ -9,6 +9,7 @@ from mcp_project_updater.config import load_project_config
 from mcp_project_updater.docker_ops import DockerCommandResult
 from mcp_project_updater.state import StateStore
 from mcp_project_updater.switcher import ProductionSmokeTestFailed, perform_switch
+from tests.config_helpers import strip_global_project_blocks, write_runtime_files
 
 
 def _write_config(tmp_path: Path) -> Path:
@@ -18,9 +19,10 @@ def _write_config(tmp_path: Path) -> Path:
     parser_path.write_text("print('ok')\n", encoding="utf-8")
     tool_path = tmp_path / "mcp_smoke_test.py"
     tool_path.write_text("print('ok')\n", encoding="utf-8")
+    write_runtime_files(tmp_path, parser_path=parser_path, tool_path=tool_path)
     payload = {
         "project": "orders",
-        "repo": {"path": str(repo_path), "branch": "master", "remote": "origin", "pullMode": "ff-only"},
+        "repo": {"branch": "master", "remote": "origin", "pullMode": "ff-only"},
         "sources": {
             "mainConfigPath": "src/cf",
             "mainConfigRequired": False,
@@ -35,7 +37,7 @@ def _write_config(tmp_path: Path) -> Path:
             "allowedExitCodes": [0, 1],
         },
         "mcp": {
-            "image": "example/image:latest",
+            "image": "comol/1c_code_metadata_mcp:light",
             "containerPort": 8000,
             "production": {"containerName": "prod", "hostPort": 8100, "url": "http://localhost:8100/mcp"},
             "build": {"containerName": "build", "hostPort": 18100, "url": "http://localhost:18100/mcp"},
@@ -46,14 +48,11 @@ def _write_config(tmp_path: Path) -> Path:
             "resetCache": False,
             "useSse": False,
             "useGpu": False,
-            "env": {"METADATA_PATH": "/app/metadata", "CODE_PATH": "/app/code"},
-            "secretEnv": {"LICENSE_KEY": "ENV_LICENSE"},
+            "env": {},
+            "secretEnv": {},
         },
         "paths": {
-            "stagingRoot": str(tmp_path / "staging"),
-            "chromaRoot": str(tmp_path / "chroma"),
-            "stateRoot": str(tmp_path / "state"),
-            "logsRoot": str(tmp_path / "logs"),
+            "root": str(tmp_path),
         },
         "smokeTest": {
             "enabled": True,
@@ -84,11 +83,12 @@ def _write_config(tmp_path: Path) -> Path:
             "onSuccess": False,
             "onFailure": True,
             "onRollback": True,
-            "webhookUrlEnv": "MCP_UPDATE_WEBHOOK_URL",
+            "webhookUrlSecret": "MCP_UPDATE_WEBHOOK_URL",
         },
         "retention": {"keepPreviousIndexes": 1, "keepLogsDays": 30, "keepStagingBuilds": 2},
         "rollback": {"preserveFailedIndex": True},
     }
+    strip_global_project_blocks(payload)
     config_path = tmp_path / "project.json"
     config_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     return config_path

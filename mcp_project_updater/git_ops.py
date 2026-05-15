@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -174,12 +173,12 @@ def _build_auth_header(auth: RepoAuthConfig, *, env: dict[str, str] | None) -> s
     if auth.type != "gitlab-token":
         raise GitOperationError(f"Unsupported repo auth type: {auth.type}", ExitCode.GIT_PULL_FAILED)
 
-    token_env = auth.token_env or ""
-    env_map = env or os.environ
-    token = env_map.get(token_env)
+    token_secret = auth.token_secret or ""
+    env_map = env or {}
+    token = env_map.get(token_secret)
     if not token:
         raise GitOperationError(
-            f"Required Git token environment variable is missing: {token_env}",
+            f"Required Git token secret is missing: {token_secret}",
             ExitCode.GIT_PULL_FAILED,
         )
 

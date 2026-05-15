@@ -1,0 +1,66 @@
+{
+  "parser": {
+    "toolPath": "C:/tools/onec/generate_config_report.py",
+    "encoding": "utf-8",
+    "warningsAsErrors": false,
+    "buildXmlOverrides": true,
+    "allowedExitCodes": [0, 1]
+  },
+  "mcp": {
+    "env": {
+      "OPENAI_API_BASE": "https://openrouter.ai/api/v1",
+      "OPENAI_MODEL": "qwen/qwen3-embedding-8b"
+    },
+    "secretEnv": {
+      "LICENSE_KEY": "ONERPA_LICENSE_KEY",
+      "OPENAI_API_KEY": "OPENROUTER_API_KEY"
+    }
+  },
+  "smokeTest": {
+    "enabled": true,
+    "profile": "production",
+    "reportValidation": {
+      "enabled": true,
+      "requiredReportPatterns": [
+        "Имя: \"",
+        "Синоним: \""
+      ],
+      "forbiddenReportPatterns": []
+    },
+    "infrastructure": {
+      "enabled": true,
+      "timeoutSeconds": 120,
+      "checkIntervalSeconds": 5,
+      "acceptableHttpStatusCodes": [200, 400, 404, 405],
+      "requireChromaNotEmpty": true,
+      "logTailLines": 200,
+      "logErrorPatterns": [
+        "Traceback",
+        "Unhandled exception",
+        "CRITICAL"
+      ],
+      "logReadyPatterns": [
+        "Started",
+        "Application startup complete"
+      ]
+    },
+    "toolSmokeTest": {
+      "enabled": true,
+      "toolPath": "C:/im/Devops/MCP Updater/mcp_smoke_test.py",
+      "timeoutSeconds": 54000,
+      "attemptTimeoutSeconds": 60,
+      "retryIntervalSeconds": 30,
+      "diagnostic": false,
+      "metadataToolName": "metadatasearch",
+      "metadataQueryArgument": "query",
+      "metadataQueries": [
+        "Конфигурации"
+      ],
+      "codeToolName": "codesearch",
+      "codeQueryArgument": "query",
+      "codeQueries": [
+        "Процедура"
+      ]
+    }
+  }
+}

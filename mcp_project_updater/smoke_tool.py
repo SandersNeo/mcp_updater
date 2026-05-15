@@ -49,11 +49,11 @@ def build_tool_smoke_config_payload(
     config: ProjectConfig,
     tool_smoke_config: ToolSmokeConfig,
     *,
-    url: str | None = None,
+    url: str,
     attempt_timeout_seconds: int | None = None,
 ) -> dict[str, object]:
     return {
-        "url": url or tool_smoke_config.url,
+        "url": url,
         "timeoutSeconds": attempt_timeout_seconds or tool_smoke_config.attempt_timeout_seconds,
         "overallTimeoutSeconds": tool_smoke_config.timeout_seconds,
         "indexCode": config.mcp.index_code,
@@ -79,7 +79,7 @@ def run_tool_smoke_test(
     *,
     working_directory: Path,
     runner: ProcessRunner = default_process_runner,
-    url: str | None = None,
+    url: str,
 ) -> ToolSmokeRunResult:
     deadline = time.monotonic() + tool_smoke_config.timeout_seconds
     attempts = 0

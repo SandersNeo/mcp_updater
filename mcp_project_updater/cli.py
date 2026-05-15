@@ -135,6 +135,7 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
         ensure_repo_available(
             config.repo,
             no_git_pull=options.no_git_pull,
+            env=config.secrets_values,
         )
 
         stage = "git_validation"
@@ -146,6 +147,7 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
         target_commit = determine_target_commit(
             config.repo,
             no_git_pull=options.no_git_pull,
+            env=config.secrets_values,
         )
         state_snapshot = state_store.read_snapshot()
         last_indexed_commit_at_start = state_snapshot.last_indexed_commit
@@ -380,8 +382,8 @@ def run_promote_existing_build(
     if not build_root.exists() or not build_chroma.exists():
         raise UpdaterError("Existing build artifacts are missing; cannot promote staging/build.", ExitCode.PRODUCTION_SWITCH_FAILED)
 
-    ensure_repo_available(config.repo, no_git_pull=options.no_git_pull)
-    target_commit = options.promote_commit or determine_target_commit(config.repo, no_git_pull=options.no_git_pull)
+    ensure_repo_available(config.repo, no_git_pull=options.no_git_pull, env=config.secrets_values)
+    target_commit = options.promote_commit or determine_target_commit(config.repo, no_git_pull=options.no_git_pull, env=config.secrets_values)
     source_fingerprint = options.promote_source_fingerprint
     if source_fingerprint is None:
         source_result = detect_sources(

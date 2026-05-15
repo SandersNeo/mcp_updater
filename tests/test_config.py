@@ -10,22 +10,55 @@ from mcp_project_updater.errors import ConfigValidationError
 
 
 def _write_config(tmp_path: Path, payload: dict, *, create_repo: bool = True) -> Path:
-    repo_path = tmp_path / "repo"
+    root_path = tmp_path / "runtime"
+    repo_path = root_path / "repo"
     if create_repo:
-        repo_path.mkdir()
+        repo_path.mkdir(parents=True)
 
     parser_path = tmp_path / "generate_config_report.py"
     parser_path.write_text("print('ok')\n", encoding="utf-8")
+    tool_path = tmp_path / "mcp_smoke_test.py"
+    tool_path.write_text("print('ok')\n", encoding="utf-8")
 
-    logs_path = tmp_path / "logs"
+    global_secrets = tmp_path / "secrets.global.json"
+    project_secrets = root_path / "secrets.local.json"
+    project_secrets.parent.mkdir(parents=True, exist_ok=True)
+    global_secrets.write_text(
+        json.dumps({"ONERPA_LICENSE_KEY": "license-value", "OPENROUTER_API_KEY": "openrouter-value"}),
+        encoding="utf-8",
+    )
+    project_secrets.write_text(
+        json.dumps({"GITLAB_TOKEN": "gitlab-value", "MCP_UPDATE_WEBHOOK_URL": "https://example.com/webhook"}),
+        encoding="utf-8",
+    )
+
     config_path = tmp_path / "project.json"
 
-    payload["repo"]["path"] = str(repo_path)
     payload["parser"]["toolPath"] = str(parser_path)
-    payload["paths"]["logsRoot"] = str(logs_path)
-    payload["paths"]["stagingRoot"] = str(tmp_path / "staging")
-    payload["paths"]["chromaRoot"] = str(tmp_path / "chroma")
-    payload["paths"]["stateRoot"] = str(tmp_path / "state")
+    payload["smokeTest"]["toolSmokeTest"]["toolPath"] = str(tool_path)
+    payload["smokeTest"]["toolSmokeTest"].pop("url", None)
+    payload["paths"]["root"] = str(root_path)
+    settings_payload = {
+        "parser": payload["parser"],
+        "mcp": {
+            "env": {
+                "OPENAI_API_BASE": "https://openrouter.ai/api/v1",
+                "OPENAI_MODEL": "qwen/qwen3-embedding-8b",
+            },
+            "secretEnv": {
+                "LICENSE_KEY": "ONERPA_LICENSE_KEY",
+                "OPENAI_API_KEY": "OPENROUTER_API_KEY",
+            },
+        },
+        "smokeTest": payload["smokeTest"],
+    }
+    (tmp_path / "settings.global.json").write_text(
+        json.dumps(settings_payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    payload = dict(payload)
+    payload.pop("parser", None)
+    payload.pop("smokeTest", None)
 
     config_path.write_text(json.dumps(payload), encoding="utf-8")
     return config_path
@@ -35,14 +68,13 @@ def _base_payload() -> dict:
     return {
         "project": "orders",
         "repo": {
-            "path": "",
             "branch": "master",
             "remote": "origin",
             "pullMode": "ff-only",
             "cloneUrl": None,
             "auth": {
                 "type": "none",
-                "tokenEnv": None,
+                "tokenSecret": None,
                 "username": "oauth2",
             },
         },
@@ -60,7 +92,7 @@ def _base_payload() -> dict:
             "allowedExitCodes": [0, 1],
         },
         "mcp": {
-            "image": "example/image:latest",
+            "image": "comol/1c_code_metadata_mcp:light",
             "containerPort": 8000,
             "production": {
                 "containerName": "mcp-orders",
@@ -79,19 +111,11 @@ def _base_payload() -> dict:
             "resetCache": False,
             "useSse": False,
             "useGpu": False,
-            "env": {
-                "METADATA_PATH": "/app/metadata",
-                "CODE_PATH": "/app/code",
-            },
-            "secretEnv": {
-                "LICENSE_KEY": "ONERPA_LICENSE_KEY",
-            },
+            "env": {},
+            "secretEnv": {},
         },
         "paths": {
-            "stagingRoot": "",
-            "chromaRoot": "",
-            "stateRoot": "",
-            "logsRoot": "",
+            "root": "",
         },
         "smokeTest": {
             "enabled": True,
@@ -132,7 +156,7 @@ def _base_payload() -> dict:
             "onSuccess": False,
             "onFailure": True,
             "onRollback": True,
-            "webhookUrlEnv": "MCP_UPDATE_WEBHOOK_URL",
+            "webhookUrlSecret": "MCP_UPDATE_WEBHOOK_URL",
         },
         "retention": {
             "keepPreviousIndexes": 1,
@@ -159,6 +183,17 @@ def test_load_project_config_defaults_and_validation(tmp_path: Path) -> None:
     assert config.smoke_test.tool_smoke_test.timeout_seconds == 300
     assert config.smoke_test.tool_smoke_test.attempt_timeout_seconds == 60
     assert config.smoke_test.tool_smoke_test.retry_interval_seconds == 15
+    assert config.repo.path == config.paths.root / "repo"
+    assert config.paths.staging_root == config.paths.root / "staging"
+    assert config.paths.chroma_root == config.paths.root / "chroma"
+    assert config.paths.state_root == config.paths.root / "state"
+    assert config.paths.logs_root == config.paths.root / "logs"
+    assert config.secrets.global_file == config.paths.root.parent / "secrets.global.json"
+    assert config.secrets.project_file == config.paths.root / "secrets.local.json"
+    assert config.settings.global_file == config.paths.root.parent / "settings.global.json"
+    assert config.mcp.env["OPENAI_API_BASE"] == "https://openrouter.ai/api/v1"
+    assert config.mcp.env["OPENAI_MODEL"] == "qwen/qwen3-embedding-8b"
+    assert config.mcp.secret_env["OPENAI_API_KEY"] == "OPENROUTER_API_KEY"
 
 
 def test_profile_defaults_to_dev(tmp_path: Path) -> None:
@@ -202,13 +237,36 @@ def test_missing_repo_path_is_allowed_when_clone_url_is_configured(tmp_path: Pat
     assert config.repo.path.exists() is False
 
 
-def test_gitlab_token_auth_requires_token_env(tmp_path: Path) -> None:
+def test_gitlab_token_auth_requires_token_secret(tmp_path: Path) -> None:
     payload = _base_payload()
     payload["repo"]["auth"] = {
         "type": "gitlab-token",
         "username": "oauth2",
     }
     config_path = _write_config(tmp_path, payload)
+
+    with pytest.raises(ConfigValidationError):
+        load_project_config(config_path)
+
+
+def test_project_level_parser_is_rejected(tmp_path: Path) -> None:
+    payload = _base_payload()
+    config_path = _write_config(tmp_path, payload)
+    written = json.loads(config_path.read_text(encoding="utf-8"))
+    written["parser"] = {"toolPath": "C:/bad.py"}
+    config_path.write_text(json.dumps(written), encoding="utf-8")
+
+    with pytest.raises(ConfigValidationError):
+        load_project_config(config_path)
+
+
+def test_global_tool_smoke_url_is_rejected(tmp_path: Path) -> None:
+    payload = _base_payload()
+    config_path = _write_config(tmp_path, payload)
+    settings_path = tmp_path / "settings.global.json"
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    settings["smokeTest"]["toolSmokeTest"]["url"] = "http://localhost:18100/mcp"
+    settings_path.write_text(json.dumps(settings), encoding="utf-8")
 
     with pytest.raises(ConfigValidationError):
         load_project_config(config_path)

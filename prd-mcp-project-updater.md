@@ -1,5 +1,18 @@
 # PRD: MCP Project Updater
 
+## 0. Authoritative config contract
+
+Этот раздел фиксирует актуальную модель конфигурации и имеет приоритет над более ранними примерами ниже по документу.
+
+- `project.json` содержит только проектные настройки: `project`, `repo`, `sources`, `mcp`, `paths.root`, `notifications`, `retention`, `rollback`.
+- `project.json` не должен содержать `parser`, `smokeTest`, `toolSmokeTest`, `repo.path`, `paths.stagingRoot`, `paths.chromaRoot`, `paths.stateRoot`, `paths.logsRoot`, `secrets.globalFile`, `secrets.projectFile`, `OPENAI_API_BASE`, `OPENAI_MODEL`.
+- Все общие настройки parser/smoke/embedding лежат в `<paths.root.parent>/settings.global.json`.
+- `settings.global.json` содержит `parser`, `mcp.env`, `mcp.secretEnv`, `smokeTest`, `smokeTest.toolSmokeTest`.
+- `settings.smokeTest.toolSmokeTest.url` запрещен: build smoke использует `mcp.build.url`, production smoke использует `mcp.production.url`.
+- Секреты читаются из `<paths.root.parent>/secrets.global.json` и `<paths.root>/secrets.local.json`; переменные окружения процесса для `GITLAB_TOKEN`, `LICENSE_KEY`, `OPENROUTER_API_KEY`, `MCP_UPDATE_WEBHOOK_URL` не являются источником конфигурации.
+- Локальный Git checkout всегда `<paths.root>/repo`; staging/chroma/state/logs всегда `<paths.root>/staging`, `<paths.root>/chroma`, `<paths.root>/state`, `<paths.root>/logs`.
+- Разрешенные MCP images: `comol/1c_code_metadata_mcp:light` и `comol/1c_code_metadata_mcp:latest`.
+
 ## 1. Название
 
 **MCP Project Updater**
@@ -215,29 +228,38 @@ Docker Desktop или Docker Engine
 
 ## 9. Структура каталогов
 
-Рекомендуемая структура:
+Актуальная структура разделяет:
+
+- installation root updater-а — каталог, из которого запускается `update_mcp_project.py`;
+- data root — каталог данных всех MCP-проектов;
+- project root — `paths.root` конкретного проекта внутри data root.
+
+Пример:
 
 ```text
-E:\mcp-1c\
-  repos\
-    orders\
+C:\Work\MCP updater\mcp-project-updater\
+  update_mcp_project.py
+  update-mcp-project.ps1
+  mcp_smoke_test.py
 
-  projects\
-    orders.json
+C:\tools\onec\
+  generate_config_report.py
 
-  tools\
-    generate-config-report\
-      generate_config_report.py
+C:\mcp-updater-data\
+  settings.global.json
+  secrets.global.json
 
-    mcp-project-updater\
-      update_mcp_project.py
-      update-mcp-project.ps1
+  orders\
+    project.json
+    secrets.local.json
 
-    mcp-smoke-test\
-      mcp_smoke_test.py
+    repo\
+      .git\
+      src\
+        cf\
+        cfe\
 
-  staging\
-    orders\
+    staging\
       build\
         metadata\
           Report.txt
@@ -264,193 +286,196 @@ E:\mcp-1c\
 
       previous\
 
-  chroma\
-    orders\
+    chroma\
       build\
       current\
       previous\
 
-  state\
-    orders\
+    state\
       last_indexed_commit
       current_commit
       previous_commit
+      last_source_fingerprint
+      last_report_hash
       lock
 
-  logs\
-    orders\
+    logs\
       20260512-103000-update.log
       20260512-103000-mcp-build.log
       20260512-103000-mcp-production.log
 ```
 
+Для этого примера:
+
+```json
+{
+  "paths": {
+    "root": "C:/mcp-updater-data/orders"
+  }
+}
+```
+
+Derived paths:
+
+```text
+repo.path    = <paths.root>/repo
+stagingRoot  = <paths.root>/staging
+chromaRoot   = <paths.root>/chroma
+stateRoot    = <paths.root>/state
+logsRoot     = <paths.root>/logs
+global config = <paths.root.parent>/settings.global.json
+global secrets = <paths.root.parent>/secrets.global.json
+project secrets = <paths.root>/secrets.local.json
+```
+
+Запрещено задавать эти derived paths отдельными полями в `project.json`.
+
 ## 10. Project config
 
-Пример `orders.json`:
+`project.json` содержит только проектные параметры.
+
+Пример `C:/mcp-updater-data/orders/project.json`:
 
 ```json
 {
   "project": "orders",
-
   "repo": {
-    "path": "E:/mcp-1c/repos/orders",
     "branch": "master",
     "remote": "origin",
-    "pullMode": "ff-only"
+    "pullMode": "ff-only",
+    "cloneUrl": "https://gitlab.example.com/team/orders.git",
+    "auth": {
+      "type": "gitlab-token",
+      "tokenSecret": "GITLAB_TOKEN",
+      "username": "oauth2"
+    }
   },
-
   "sources": {
     "mainConfigPath": "src/cf",
-    "mainConfigRequired": false,
+    "mainConfigRequired": true,
     "extensionPath": "src/cfe",
     "extensionRequired": false
   },
-
-  "parser": {
-    "toolPath": "E:/mcp-1c/tools/generate-config-report/generate_config_report.py",
-    "encoding": "utf-8",
-    "warningsAsErrors": false,
-    "buildXmlOverrides": true,
-    "allowedExitCodes": [0, 1]
-  },
-
   "mcp": {
-    "image": "comol/1c_code_metadata_mcp:latest",
+    "image": "comol/1c_code_metadata_mcp:light",
     "containerPort": 8000,
-
     "production": {
       "containerName": "mcp-orders",
       "hostPort": 8100,
       "url": "http://localhost:8100/mcp"
     },
-
     "build": {
       "containerName": "mcp-orders-build",
       "hostPort": 18100,
       "url": "http://localhost:18100/mcp"
     },
-
     "indexCode": true,
     "indexMetadata": true,
     "indexHelp": false,
-
     "resetDatabaseOnBuild": true,
     "resetCache": false,
     "useSse": false,
-    "useGpu": false,
-
-    "env": {
-      "METADATA_PATH": "/app/metadata",
-      "CODE_PATH": "/app/code",
-      "OPENAI_API_BASE": "http://host.docker.internal:1234/v1",
-      "OPENAI_API_KEY": "lm-studio",
-      "OPENAI_MODEL": "Qwen3-Embedding-4B"
-    },
-
-    "secretEnv": {
-      "LICENSE_KEY": "ONERPA_LICENSE_KEY"
-    }
+    "useGpu": false
   },
-
   "paths": {
-    "stagingRoot": "E:/mcp-1c/staging/orders",
-    "chromaRoot": "E:/mcp-1c/chroma/orders",
-    "stateRoot": "E:/mcp-1c/state/orders",
-    "logsRoot": "E:/mcp-1c/logs/orders"
+    "root": "C:/mcp-updater-data/orders"
   },
-
-  "smokeTest": {
-    "enabled": true,
-    "profile": "production",
-
-    "reportValidation": {
-      "enabled": true,
-      "requiredReportPatterns": [
-        "^\\s*-\\s*Конфигурации\\.",
-        "Имя: \"",
-        "Синоним: \"",
-        "Комментарий: \""
-      ],
-      "forbiddenReportPatterns": [
-        "Модуль менеджера",
-        "Модуль объекта",
-        "Модуль формы",
-        "ПутьКФайлу",
-        "ФайлBSL",
-        "code/main",
-        "code/extensions",
-        "src/cf",
-        "src/cfe",
-        "ПоисковыеТеги",
-        "Источник: Основная конфигурация",
-        "Источник: Расширение"
-      ]
-    },
-
-    "infrastructure": {
-      "enabled": true,
-      "timeoutSeconds": 7200,
-      "checkIntervalSeconds": 15,
-      "httpReadyUrl": "http://localhost:18100/mcp",
-      "acceptableHttpStatusCodes": [200, 400, 404, 405],
-      "requireChromaNotEmpty": true,
-      "logTailLines": 300,
-      "logReadyPatterns": [
-        "Application startup complete",
-        "Uvicorn running",
-        "Server started",
-        "Started server process"
-      ],
-      "logErrorPatterns": [
-        "Traceback",
-        "Exception",
-        "CRITICAL",
-        "failed",
-        "FAILED",
-        "Ошибка",
-        "ошибка"
-      ]
-    },
-
-    "toolSmokeTest": {
-      "enabled": true,
-      "toolPath": "E:/mcp-1c/tools/mcp-smoke-test/mcp_smoke_test.py",
-      "url": "http://localhost:18100/mcp",
-      "timeoutSeconds": 7200,
-      "metadataToolName": "metadatasearch",
-      "metadataQueryArgument": "query",
-      "metadataQueries": [
-        "Конфигурации",
-        "Документы",
-        "Справочники"
-      ],
-      "codeToolName": "codesearch",
-      "codeQueryArgument": "query",
-      "codeQueries": [
-        "Процедура",
-        "Функция"
-      ]
-    }
-  },
-
   "notifications": {
     "enabled": true,
     "onSuccess": false,
     "onFailure": true,
     "onRollback": true,
-    "webhookUrlEnv": "MCP_UPDATE_WEBHOOK_URL"
+    "webhookUrlSecret": "MCP_UPDATE_WEBHOOK_URL"
   },
-
   "rollback": {
     "preserveFailedIndex": true
   },
-
   "retention": {
     "keepPreviousIndexes": 1,
     "keepLogsDays": 30,
     "keepStagingBuilds": 2
   }
 }
+```
+
+Общие настройки для всех проектов лежат в `C:/mcp-updater-data/settings.global.json`:
+
+```json
+{
+  "parser": {
+    "toolPath": "C:/tools/onec/generate_config_report.py",
+    "encoding": "utf-8",
+    "warningsAsErrors": false,
+    "buildXmlOverrides": true,
+    "allowedExitCodes": [0, 1]
+  },
+  "mcp": {
+    "env": {
+      "OPENAI_API_BASE": "https://openrouter.ai/api/v1",
+      "OPENAI_MODEL": "qwen/qwen3-embedding-8b"
+    },
+    "secretEnv": {
+      "LICENSE_KEY": "ONERPA_LICENSE_KEY",
+      "OPENAI_API_KEY": "OPENROUTER_API_KEY"
+    }
+  },
+  "smokeTest": {
+    "enabled": true,
+    "profile": "production",
+    "reportValidation": {
+      "enabled": true,
+      "requiredReportPatterns": [
+        "Имя: \"",
+        "Синоним: \""
+      ],
+      "forbiddenReportPatterns": []
+    },
+    "infrastructure": {
+      "enabled": true,
+      "timeoutSeconds": 120,
+      "checkIntervalSeconds": 5,
+      "acceptableHttpStatusCodes": [200, 400, 404, 405],
+      "requireChromaNotEmpty": true,
+      "logTailLines": 200,
+      "logErrorPatterns": [
+        "Traceback",
+        "Unhandled exception",
+        "CRITICAL"
+      ],
+      "logReadyPatterns": [
+        "Started",
+        "Application startup complete"
+      ]
+    },
+    "toolSmokeTest": {
+      "enabled": true,
+      "toolPath": "C:/im/Devops/MCP Updater/mcp_smoke_test.py",
+      "timeoutSeconds": 54000,
+      "attemptTimeoutSeconds": 60,
+      "retryIntervalSeconds": 30,
+      "diagnostic": false,
+      "metadataToolName": "metadatasearch",
+      "metadataQueryArgument": "query",
+      "metadataQueries": [
+        "Конфигурации"
+      ],
+      "codeToolName": "codesearch",
+      "codeQueryArgument": "query",
+      "codeQueries": [
+        "Процедура"
+      ]
+    }
+  }
+}
+```
+
+`settings.smokeTest.toolSmokeTest.url` запрещен. Build URL берется из `project.json -> mcp.build.url`, production URL берется из `project.json -> mcp.production.url`.
+
+Секреты лежат отдельно:
+
+```text
+C:/mcp-updater-data/secrets.global.json
+C:/mcp-updater-data/orders/secrets.local.json
 ```
 
 ## 11. Порты и endpoint
@@ -682,6 +707,27 @@ target_commit = текущий HEAD локальной рабочей копии
 4. build artifacts сохраняются для диагностики.
 5. Отправляется failure notification, если включено.
 6. Exit code по типу ошибки.
+```
+
+### 16.4. Bootstrap path
+
+Если это первый production deploy и рабочий MCP еще не существует:
+
+```text
+1. Допустимо, что локальный repo еще не клонирован.
+2. Допустимо, что current/previous artifacts еще отсутствуют.
+3. Допустимо, что production container еще отсутствует.
+4. Updater должен выполнить обычный build pipeline.
+5. При успешном switch:
+   - build → current;
+   - chroma/build → chroma/current;
+   - current_commit = target_commit;
+   - last_indexed_commit = target_commit;
+   - previous_commit не заполняется, пока не появится следующий успешный baseline.
+6. Если самый первый production smoke-test после switch упал:
+   - automatic rollback восстановить нечего, так как previous baseline отсутствует;
+   - updater завершает workflow как rollback failed;
+   - требуется ручное вмешательство оператора.
 ```
 
 ## 17. Git requirements
@@ -1171,6 +1217,8 @@ rollback.preserveFailedIndex = true
 
 Сохранение failed-index нужно для диагностики: можно посмотреть неудачный `Report.txt`, `code/`, `chroma_db` и Docker logs.
 
+Automatic rollback требует существующего `previous` baseline. Если это самый первый production deploy и `previous` artifacts еще не существуют, automatic rollback невозможен и workflow завершается статусом `rollback failed`.
+
 ### FR-019. Ручной rollback
 
 Команда:
@@ -1194,6 +1242,8 @@ update-mcp-project.ps1 -Config E:\mcp-1c\projects\orders.json -Rollback
 меняет current и previous
 перезапускает production MCP
 ```
+
+Ручной rollback возможен только если уже существуют обе версии: `current` и `previous`, а также записаны `current_commit` и `previous_commit`.
 
 ## 25. Locking
 
@@ -1281,11 +1331,11 @@ Config:
   "onSuccess": false,
   "onFailure": true,
   "onRollback": true,
-  "webhookUrlEnv": "MCP_UPDATE_WEBHOOK_URL"
+  "webhookUrlSecret": "MCP_UPDATE_WEBHOOK_URL"
 }
 ```
 
-Webhook URL берется только из env.
+Webhook URL берется только из secrets files по имени секрета `notifications.webhookUrlSecret`.
 
 Сообщение должно содержать:
 

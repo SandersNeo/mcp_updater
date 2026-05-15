@@ -10,6 +10,7 @@ from mcp_project_updater.constants import ExitCode
 from mcp_project_updater.docker_ops import DockerCommandResult
 from mcp_project_updater.mcp_container import MissingSecretEnvError, build_build_container_command, prepare_chroma_build, start_build_container
 from mcp_project_updater.staging import prepare_build_staging
+from tests.config_helpers import strip_global_project_blocks, write_runtime_files
 
 
 def _write_config(tmp_path: Path) -> Path:
@@ -17,9 +18,12 @@ def _write_config(tmp_path: Path) -> Path:
     repo_path.mkdir()
     parser_path = tmp_path / "generate_config_report.py"
     parser_path.write_text("print('ok')\n", encoding="utf-8")
+    tool_path = tmp_path / "mcp_smoke_test.py"
+    tool_path.write_text("print('ok')\n", encoding="utf-8")
+    write_runtime_files(tmp_path, parser_path=parser_path, tool_path=tool_path)
     payload = {
         "project": "orders",
-        "repo": {"path": str(repo_path), "branch": "master", "remote": "origin", "pullMode": "ff-only"},
+        "repo": {"branch": "master", "remote": "origin", "pullMode": "ff-only"},
         "sources": {
             "mainConfigPath": "src/cf",
             "mainConfigRequired": False,
@@ -34,7 +38,7 @@ def _write_config(tmp_path: Path) -> Path:
             "allowedExitCodes": [0, 1],
         },
         "mcp": {
-            "image": "example/image:latest",
+            "image": "comol/1c_code_metadata_mcp:light",
             "containerPort": 8000,
             "production": {"containerName": "prod", "hostPort": 8100, "url": "http://localhost:8100/mcp"},
             "build": {"containerName": "build", "hostPort": 18100, "url": "http://localhost:18100/mcp"},
@@ -45,14 +49,11 @@ def _write_config(tmp_path: Path) -> Path:
             "resetCache": False,
             "useSse": False,
             "useGpu": False,
-            "env": {"METADATA_PATH": "/app/metadata", "CODE_PATH": "/app/code"},
-            "secretEnv": {"LICENSE_KEY": "TEST_LICENSE_ENV"},
+            "env": {},
+            "secretEnv": {},
         },
         "paths": {
-            "stagingRoot": str(tmp_path / "staging"),
-            "chromaRoot": str(tmp_path / "chroma"),
-            "stateRoot": str(tmp_path / "state"),
-            "logsRoot": str(tmp_path / "logs"),
+            "root": str(tmp_path),
         },
         "smokeTest": {
             "enabled": True,
@@ -87,13 +88,12 @@ def _write_config(tmp_path: Path) -> Path:
             "onSuccess": False,
             "onFailure": True,
             "onRollback": True,
-            "webhookUrlEnv": "MCP_UPDATE_WEBHOOK_URL",
+            "webhookUrlSecret": "MCP_UPDATE_WEBHOOK_URL",
         },
         "retention": {"keepPreviousIndexes": 1, "keepLogsDays": 30, "keepStagingBuilds": 2},
         "rollback": {"preserveFailedIndex": True},
     }
-    tool_path = tmp_path / "mcp_smoke_test.py"
-    tool_path.write_text("print('ok')\n", encoding="utf-8")
+    strip_global_project_blocks(payload)
     config_path = tmp_path / "project.json"
     config_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     return config_path
@@ -122,9 +122,8 @@ def test_prepare_chroma_build_can_seed_from_current(tmp_path: Path) -> None:
 
 def test_build_build_container_command_requires_secret_env(tmp_path: Path, monkeypatch) -> None:
     config = load_project_config(_write_config(tmp_path))
+    config.mcp.secrets.clear()
     build_paths = prepare_build_staging(config.paths.staging_root, config.project)
-
-    monkeypatch.delenv("TEST_LICENSE_ENV", raising=False)
 
     with pytest.raises(MissingSecretEnvError) as exc:
         build_build_container_command(
@@ -143,7 +142,6 @@ def test_build_build_container_command_requires_secret_env(tmp_path: Path, monke
 def test_start_build_container_runs_remove_and_run(tmp_path: Path, monkeypatch) -> None:
     config = load_project_config(_write_config(tmp_path))
     build_paths = prepare_build_staging(config.paths.staging_root, config.project)
-    monkeypatch.setenv("TEST_LICENSE_ENV", "secret")
     calls = []
 
     def runner(command, cwd):
@@ -165,7 +163,6 @@ def test_start_build_container_runs_remove_and_run(tmp_path: Path, monkeypatch) 
 def test_start_build_container_can_disable_metadata_and_seed_from_current(tmp_path: Path, monkeypatch) -> None:
     config = load_project_config(_write_config(tmp_path))
     build_paths = prepare_build_staging(config.paths.staging_root, config.project)
-    monkeypatch.setenv("TEST_LICENSE_ENV", "secret")
     current_chroma = config.paths.chroma_root / "current"
     current_chroma.mkdir(parents=True)
     (current_chroma / "db.bin").write_text("seed", encoding="utf-8")

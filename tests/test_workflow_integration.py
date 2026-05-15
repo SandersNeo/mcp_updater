@@ -9,6 +9,7 @@ from mcp_project_updater.constants import ExitCode
 from mcp_project_updater.docker_ops import DockerCommandResult
 from mcp_project_updater.git_ops import RepoValidationResult
 from mcp_project_updater.state import StateStore
+from tests.config_helpers import strip_global_project_blocks, write_runtime_files
 
 
 class FakeDockerRunner:
@@ -41,10 +42,9 @@ def test_run_update_integration_updates_state_and_current_artifacts(tmp_path: Pa
     log_path.write_text("", encoding="utf-8")
 
     (config.repo.path / "src" / "cf" / "module.bsl").write_text("Procedure Test() EndProcedure\n", encoding="utf-8")
-    monkeypatch.setenv("ONERPA_LICENSE_KEY", "secret-value")
 
     fake_runner = FakeDockerRunner()
-    monkeypatch.setattr("mcp_project_updater.cli.ensure_repo_available", lambda repo, no_git_pull: None)
+    monkeypatch.setattr("mcp_project_updater.cli.ensure_repo_available", lambda repo, no_git_pull, env=None: None)
     monkeypatch.setattr("mcp_project_updater.cli.validate_repo", _fake_repo_validation)
     monkeypatch.setattr("mcp_project_updater.cli.determine_target_commit", lambda *args, **kwargs: "commit-001")
     monkeypatch.setattr("mcp_project_updater.cli.run_parser", _fake_run_parser)
@@ -87,7 +87,6 @@ def test_run_rollback_integration_swaps_current_and_previous(tmp_path: Path, mon
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.write_text("", encoding="utf-8")
 
-    monkeypatch.setenv("ONERPA_LICENSE_KEY", "secret-value")
     monkeypatch.setattr("mcp_project_updater.cli.default_docker_runner", FakeDockerRunner())
     monkeypatch.setattr(
         "mcp_project_updater.cli.run_production_smoke_test",
@@ -125,7 +124,6 @@ def test_run_rollback_returns_warning_when_notification_fails(tmp_path: Path, mo
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.write_text("", encoding="utf-8")
 
-    monkeypatch.setenv("ONERPA_LICENSE_KEY", "secret-value")
     monkeypatch.setattr("mcp_project_updater.cli.default_docker_runner", FakeDockerRunner())
     monkeypatch.setattr(
         "mcp_project_updater.cli.run_production_smoke_test",
@@ -162,11 +160,13 @@ def _write_config(tmp_path: Path) -> Path:
     (repo_path / "src" / "cf").mkdir(parents=True)
     parser_path = tmp_path / "generate_config_report.py"
     parser_path.write_text("print('ok')\n", encoding="utf-8")
+    tool_path = tmp_path / "mcp_smoke_test.py"
+    tool_path.write_text("print('ok')\n", encoding="utf-8")
+    write_runtime_files(tmp_path, parser_path=parser_path, tool_path=tool_path)
 
     payload = {
         "project": "orders",
         "repo": {
-            "path": str(repo_path),
             "branch": "master",
             "remote": "origin",
             "pullMode": "ff-only",
@@ -185,7 +185,7 @@ def _write_config(tmp_path: Path) -> Path:
             "allowedExitCodes": [0, 1],
         },
         "mcp": {
-            "image": "example/image:latest",
+            "image": "comol/1c_code_metadata_mcp:light",
             "containerPort": 8000,
             "production": {
                 "containerName": "mcp-orders",
@@ -204,14 +204,11 @@ def _write_config(tmp_path: Path) -> Path:
             "resetCache": False,
             "useSse": False,
             "useGpu": False,
-            "env": {"METADATA_PATH": "/app/metadata", "CODE_PATH": "/app/code"},
-            "secretEnv": {"LICENSE_KEY": "ONERPA_LICENSE_KEY"},
+            "env": {},
+            "secretEnv": {},
         },
         "paths": {
-            "stagingRoot": str(tmp_path / "staging"),
-            "chromaRoot": str(tmp_path / "chroma"),
-            "stateRoot": str(tmp_path / "state"),
-            "logsRoot": str(tmp_path / "logs"),
+            "root": str(tmp_path),
         },
         "smokeTest": {
             "enabled": True,
@@ -250,7 +247,7 @@ def _write_config(tmp_path: Path) -> Path:
             "onSuccess": False,
             "onFailure": True,
             "onRollback": True,
-            "webhookUrlEnv": "MCP_UPDATE_WEBHOOK_URL",
+            "webhookUrlSecret": "MCP_UPDATE_WEBHOOK_URL",
         },
         "retention": {
             "keepPreviousIndexes": 1,
@@ -262,8 +259,7 @@ def _write_config(tmp_path: Path) -> Path:
         },
     }
 
-    tool_path = Path(payload["smokeTest"]["toolSmokeTest"]["toolPath"])
-    tool_path.write_text("print('ok')\n", encoding="utf-8")
+    strip_global_project_blocks(payload)
 
     config_path = tmp_path / "project.json"
     config_path.write_text(json.dumps(payload), encoding="utf-8")

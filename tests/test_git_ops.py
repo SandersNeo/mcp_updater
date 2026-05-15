@@ -24,7 +24,7 @@ def _repo(path: Path) -> RepoConfig:
         clone_url="https://gitlab.example.com/team/orders.git",
         auth=RepoAuthConfig(
             type="none",
-            token_env=None,
+            token_secret=None,
             username="oauth2",
         ),
     )
@@ -205,7 +205,7 @@ def test_gitlab_token_auth_is_applied_to_clone_and_fetch(tmp_path: Path) -> None
         clone_url="https://gitlab.example.com/team/orders.git",
         auth=RepoAuthConfig(
             type="gitlab-token",
-            token_env="GITLAB_TOKEN",
+            token_secret="GITLAB_TOKEN",
             username="oauth2",
         ),
     )

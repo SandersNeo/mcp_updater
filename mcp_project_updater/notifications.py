@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -39,10 +38,10 @@ def send_notification(
     if not config.enabled:
         return
 
-    env = env or os.environ
-    webhook_url = env.get(config.webhook_url_env)
+    env = env or config.secrets
+    webhook_url = env.get(config.webhook_url_secret)
     if not webhook_url:
-        raise NotificationError(f"Notification environment variable is missing: {config.webhook_url_env}")
+        raise NotificationError(f"Notification secret is missing: {config.webhook_url_secret}")
 
     sender = sender or _default_sender
     try:

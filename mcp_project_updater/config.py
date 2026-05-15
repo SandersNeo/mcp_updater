@@ -7,6 +7,14 @@ from typing import Any
 
 from .constants import DEFAULT_SMOKE_PROFILE
 from .errors import ConfigValidationError
+from .secrets import SecretsConfig, load_secrets
+from .settings import SettingsConfig, get_mapping, load_global_settings
+
+
+ALLOWED_MCP_IMAGES = {
+    "comol/1c_code_metadata_mcp:light",
+    "comol/1c_code_metadata_mcp:latest",
+}
 
 
 def _expect_mapping(value: Any, field_name: str) -> dict[str, Any]:
@@ -52,10 +60,27 @@ def _expect_optional_string(value: Any, field_name: str) -> str | None:
     return stripped or None
 
 
+def _expect_settings_mapping(settings: SettingsConfig, path: tuple[str, ...], field_name: str) -> dict[str, Any]:
+    mapping = get_mapping(settings, path)
+    if not mapping:
+        raise ConfigValidationError(
+            f"Settings file '{settings.global_file}' must define non-empty object '{field_name}'."
+        )
+    return mapping
+
+
+def _reject_project_level_global_blocks(raw: dict[str, Any]) -> None:
+    for field_name in ("parser", "smokeTest"):
+        if field_name in raw:
+            raise ConfigValidationError(
+                f"Field '{field_name}' belongs in settings.global.json and must not be set in project.json."
+            )
+
+
 @dataclass(slots=True)
 class RepoAuthConfig:
     type: str
-    token_env: str | None
+    token_secret: str | None
     username: str | None
 
 
@@ -108,10 +133,12 @@ class MCPConfig:
     use_gpu: bool
     env: dict[str, str]
     secret_env: dict[str, str]
+    secrets: dict[str, str]
 
 
 @dataclass(slots=True)
 class PathsConfig:
+    root: Path
     staging_root: Path
     chroma_root: Path
     state_root: Path
@@ -141,7 +168,6 @@ class InfrastructureSmokeConfig:
 class ToolSmokeConfig:
     enabled: bool
     tool_path: Path
-    url: str
     timeout_seconds: int
     attempt_timeout_seconds: int
     retry_interval_seconds: int
@@ -169,7 +195,8 @@ class NotificationsConfig:
     on_success: bool
     on_failure: bool
     on_rollback: bool
-    webhook_url_env: str
+    webhook_url_secret: str
+    secrets: dict[str, str]
 
 
 @dataclass(slots=True)
@@ -196,6 +223,9 @@ class ProjectConfig:
     notifications: NotificationsConfig
     retention: RetentionConfig
     rollback: RollbackConfig
+    secrets: SecretsConfig
+    secrets_values: dict[str, str]
+    settings: SettingsConfig
     config_path: Path
 
 
@@ -216,35 +246,62 @@ def load_project_config(config_path: str | Path) -> ProjectConfig:
 
 def _parse_project_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
     repo_raw = _expect_mapping(raw.get("repo"), "repo")
+    project_name = _expect_string(raw.get("project"), "project")
+    paths_raw = _expect_mapping(raw.get("paths"), "paths")
+    paths_root = _expect_path_string(paths_raw.get("root"), "paths.root")
+    settings_config = load_global_settings(paths_root.parent / "settings.global.json")
+    _reject_project_level_global_blocks(raw)
     sources_raw = _expect_mapping(raw.get("sources"), "sources")
-    parser_raw = _expect_mapping(raw.get("parser"), "parser")
+    parser_raw = _expect_settings_mapping(settings_config, ("parser",), "settings.parser")
     mcp_raw = _expect_mapping(raw.get("mcp"), "mcp")
     production_raw = _expect_mapping(mcp_raw.get("production"), "mcp.production")
     build_raw = _expect_mapping(mcp_raw.get("build"), "mcp.build")
-    paths_raw = _expect_mapping(raw.get("paths"), "paths")
-    smoke_raw = _expect_mapping(raw.get("smokeTest"), "smokeTest")
-    report_raw = _expect_mapping(smoke_raw.get("reportValidation"), "smokeTest.reportValidation")
-    infrastructure_raw = _expect_mapping(smoke_raw.get("infrastructure"), "smokeTest.infrastructure")
-    tool_raw = _expect_mapping(smoke_raw.get("toolSmokeTest"), "smokeTest.toolSmokeTest")
+    smoke_raw = _expect_settings_mapping(settings_config, ("smokeTest",), "settings.smokeTest")
+    report_raw = _expect_mapping(smoke_raw.get("reportValidation"), "settings.smokeTest.reportValidation")
+    infrastructure_raw = _expect_mapping(smoke_raw.get("infrastructure"), "settings.smokeTest.infrastructure")
+    tool_raw = _expect_mapping(smoke_raw.get("toolSmokeTest"), "settings.smokeTest.toolSmokeTest")
     notifications_raw = _expect_mapping(raw.get("notifications"), "notifications")
     retention_raw = _expect_mapping(raw.get("retention"), "retention")
     rollback_raw = _expect_mapping(raw.get("rollback", {}), "rollback")
 
-    tool_timeout_seconds = _expect_int(tool_raw.get("timeoutSeconds"), "smokeTest.toolSmokeTest.timeoutSeconds")
+    tool_timeout_seconds = _expect_int(tool_raw.get("timeoutSeconds"), "settings.smokeTest.toolSmokeTest.timeoutSeconds")
+    if "url" in tool_raw:
+        raise ConfigValidationError(
+            "Field 'settings.smokeTest.toolSmokeTest.url' is forbidden; use mcp.build.url and mcp.production.url."
+        )
+    secrets_config = SecretsConfig(
+        global_file=paths_root.parent / "secrets.global.json",
+        project_file=paths_root / "secrets.local.json",
+    )
+
+    secrets_values = load_secrets(secrets_config)
+    global_mcp_env = {str(key): str(value) for key, value in get_mapping(settings_config, ("mcp", "env")).items()}
+    project_mcp_env_raw = _expect_mapping(mcp_raw.get("env", {}), "mcp.env")
+    for global_only_key in ("OPENAI_API_BASE", "OPENAI_MODEL"):
+        if global_only_key in project_mcp_env_raw:
+            raise ConfigValidationError(f"Field 'mcp.env.{global_only_key}' belongs in settings.global.json.")
+    project_mcp_env = {str(key): str(value) for key, value in project_mcp_env_raw.items()}
+    default_mcp_env = {"METADATA_PATH": "/app/metadata", "CODE_PATH": "/app/code"}
+    global_mcp_secret_env = {
+        str(key): str(value) for key, value in get_mapping(settings_config, ("mcp", "secretEnv")).items()
+    }
+    project_mcp_secret_env = {
+        str(key): str(value) for key, value in _expect_mapping(mcp_raw.get("secretEnv", {}), "mcp.secretEnv").items()
+    }
 
     return ProjectConfig(
-        project=_expect_string(raw.get("project"), "project"),
+        project=project_name,
         repo=RepoConfig(
-            path=_expect_path_string(repo_raw.get("path"), "repo.path"),
+            path=paths_root / "repo",
             branch=_expect_string(repo_raw.get("branch"), "repo.branch"),
             remote=_expect_string(repo_raw.get("remote"), "repo.remote"),
             pull_mode=_expect_string(repo_raw.get("pullMode"), "repo.pullMode"),
             clone_url=_expect_optional_string(repo_raw.get("cloneUrl"), "repo.cloneUrl"),
             auth=RepoAuthConfig(
                 type=_expect_string(_expect_mapping(repo_raw.get("auth", {}), "repo.auth").get("type", "none"), "repo.auth.type"),
-                token_env=_expect_optional_string(
-                    _expect_mapping(repo_raw.get("auth", {}), "repo.auth").get("tokenEnv"),
-                    "repo.auth.tokenEnv",
+                token_secret=_expect_optional_string(
+                    _expect_mapping(repo_raw.get("auth", {}), "repo.auth").get("tokenSecret"),
+                    "repo.auth.tokenSecret",
                 ),
                 username=_expect_optional_string(
                     _expect_mapping(repo_raw.get("auth", {}), "repo.auth").get("username", "oauth2"),
@@ -259,11 +316,11 @@ def _parse_project_config(raw: dict[str, Any], config_path: Path) -> ProjectConf
             extension_required=_expect_bool(sources_raw.get("extensionRequired"), "sources.extensionRequired"),
         ),
         parser=ParserConfig(
-            tool_path=_expect_path_string(parser_raw.get("toolPath"), "parser.toolPath"),
-            encoding=_expect_string(parser_raw.get("encoding"), "parser.encoding"),
-            warnings_as_errors=_expect_bool(parser_raw.get("warningsAsErrors"), "parser.warningsAsErrors"),
-            build_xml_overrides=_expect_bool(parser_raw.get("buildXmlOverrides"), "parser.buildXmlOverrides"),
-            allowed_exit_codes=_expect_list_of_ints(parser_raw.get("allowedExitCodes"), "parser.allowedExitCodes"),
+            tool_path=_expect_path_string(parser_raw.get("toolPath"), "settings.parser.toolPath"),
+            encoding=_expect_string(parser_raw.get("encoding"), "settings.parser.encoding"),
+            warnings_as_errors=_expect_bool(parser_raw.get("warningsAsErrors"), "settings.parser.warningsAsErrors"),
+            build_xml_overrides=_expect_bool(parser_raw.get("buildXmlOverrides"), "settings.parser.buildXmlOverrides"),
+            allowed_exit_codes=_expect_list_of_ints(parser_raw.get("allowedExitCodes"), "settings.parser.allowedExitCodes"),
         ),
         mcp=MCPConfig(
             image=_expect_string(mcp_raw.get("image"), "mcp.image"),
@@ -285,69 +342,70 @@ def _parse_project_config(raw: dict[str, Any], config_path: Path) -> ProjectConf
             reset_cache=_expect_bool(mcp_raw.get("resetCache"), "mcp.resetCache"),
             use_sse=_expect_bool(mcp_raw.get("useSse"), "mcp.useSse"),
             use_gpu=_expect_bool(mcp_raw.get("useGpu"), "mcp.useGpu"),
-            env={str(key): str(value) for key, value in _expect_mapping(mcp_raw.get("env"), "mcp.env").items()},
-            secret_env={str(key): str(value) for key, value in _expect_mapping(mcp_raw.get("secretEnv"), "mcp.secretEnv").items()},
+            env={**default_mcp_env, **global_mcp_env, **project_mcp_env},
+            secret_env={**global_mcp_secret_env, **project_mcp_secret_env},
+            secrets=secrets_values,
         ),
         paths=PathsConfig(
-            staging_root=_expect_path_string(paths_raw.get("stagingRoot"), "paths.stagingRoot"),
-            chroma_root=_expect_path_string(paths_raw.get("chromaRoot"), "paths.chromaRoot"),
-            state_root=_expect_path_string(paths_raw.get("stateRoot"), "paths.stateRoot"),
-            logs_root=_expect_path_string(paths_raw.get("logsRoot"), "paths.logsRoot"),
+            root=paths_root,
+            staging_root=paths_root / "staging",
+            chroma_root=paths_root / "chroma",
+            state_root=paths_root / "state",
+            logs_root=paths_root / "logs",
         ),
         smoke_test=SmokeTestConfig(
-            enabled=_expect_bool(smoke_raw.get("enabled"), "smokeTest.enabled"),
+            enabled=_expect_bool(smoke_raw.get("enabled"), "settings.smokeTest.enabled"),
             profile=str(smoke_raw.get("profile", DEFAULT_SMOKE_PROFILE)),
             report_validation=ReportValidationConfig(
-                enabled=_expect_bool(report_raw.get("enabled"), "smokeTest.reportValidation.enabled"),
+                enabled=_expect_bool(report_raw.get("enabled"), "settings.smokeTest.reportValidation.enabled"),
                 required_report_patterns=[str(item) for item in report_raw.get("requiredReportPatterns", [])],
                 forbidden_report_patterns=[str(item) for item in report_raw.get("forbiddenReportPatterns", [])],
             ),
             infrastructure=InfrastructureSmokeConfig(
-                enabled=_expect_bool(infrastructure_raw.get("enabled"), "smokeTest.infrastructure.enabled"),
-                timeout_seconds=_expect_int(infrastructure_raw.get("timeoutSeconds"), "smokeTest.infrastructure.timeoutSeconds"),
-                check_interval_seconds=_expect_int(infrastructure_raw.get("checkIntervalSeconds"), "smokeTest.infrastructure.checkIntervalSeconds"),
+                enabled=_expect_bool(infrastructure_raw.get("enabled"), "settings.smokeTest.infrastructure.enabled"),
+                timeout_seconds=_expect_int(infrastructure_raw.get("timeoutSeconds"), "settings.smokeTest.infrastructure.timeoutSeconds"),
+                check_interval_seconds=_expect_int(infrastructure_raw.get("checkIntervalSeconds"), "settings.smokeTest.infrastructure.checkIntervalSeconds"),
                 acceptable_http_status_codes=_expect_list_of_ints(
                     infrastructure_raw.get("acceptableHttpStatusCodes"),
-                    "smokeTest.infrastructure.acceptableHttpStatusCodes",
+                    "settings.smokeTest.infrastructure.acceptableHttpStatusCodes",
                 ),
                 require_chroma_not_empty=_expect_bool(
                     infrastructure_raw.get("requireChromaNotEmpty"),
-                    "smokeTest.infrastructure.requireChromaNotEmpty",
+                    "settings.smokeTest.infrastructure.requireChromaNotEmpty",
                 ),
-                log_tail_lines=_expect_int(infrastructure_raw.get("logTailLines"), "smokeTest.infrastructure.logTailLines"),
+                log_tail_lines=_expect_int(infrastructure_raw.get("logTailLines"), "settings.smokeTest.infrastructure.logTailLines"),
                 log_error_patterns=[str(item) for item in infrastructure_raw.get("logErrorPatterns", [])],
                 log_ready_patterns=[str(item) for item in infrastructure_raw.get("logReadyPatterns", [])],
             ),
             tool_smoke_test=ToolSmokeConfig(
-                enabled=_expect_bool(tool_raw.get("enabled"), "smokeTest.toolSmokeTest.enabled"),
-                tool_path=_expect_path_string(tool_raw.get("toolPath"), "smokeTest.toolSmokeTest.toolPath"),
-                url=_expect_string(tool_raw.get("url"), "smokeTest.toolSmokeTest.url"),
+                enabled=_expect_bool(tool_raw.get("enabled"), "settings.smokeTest.toolSmokeTest.enabled"),
+                tool_path=_expect_path_string(tool_raw.get("toolPath"), "settings.smokeTest.toolSmokeTest.toolPath"),
                 timeout_seconds=tool_timeout_seconds,
                 attempt_timeout_seconds=_expect_int(
                     tool_raw.get("attemptTimeoutSeconds", min(tool_timeout_seconds, 60)),
-                    "smokeTest.toolSmokeTest.attemptTimeoutSeconds",
+                    "settings.smokeTest.toolSmokeTest.attemptTimeoutSeconds",
                 ),
                 retry_interval_seconds=_expect_int(
                     tool_raw.get("retryIntervalSeconds", 15),
-                    "smokeTest.toolSmokeTest.retryIntervalSeconds",
+                    "settings.smokeTest.toolSmokeTest.retryIntervalSeconds",
                 ),
-                diagnostic=_expect_bool(tool_raw.get("diagnostic", False), "smokeTest.toolSmokeTest.diagnostic"),
+                diagnostic=_expect_bool(tool_raw.get("diagnostic", False), "settings.smokeTest.toolSmokeTest.diagnostic"),
                 metadata_tool_name=_expect_string(
                     tool_raw.get("metadataToolName", "metadatasearch"),
-                    "smokeTest.toolSmokeTest.metadataToolName",
+                    "settings.smokeTest.toolSmokeTest.metadataToolName",
                 ),
                 metadata_query_argument=_expect_string(
                     tool_raw.get("metadataQueryArgument", "query"),
-                    "smokeTest.toolSmokeTest.metadataQueryArgument",
+                    "settings.smokeTest.toolSmokeTest.metadataQueryArgument",
                 ),
                 metadata_queries=[str(item) for item in tool_raw.get("metadataQueries", [])],
                 code_tool_name=_expect_string(
                     tool_raw.get("codeToolName", "codesearch"),
-                    "smokeTest.toolSmokeTest.codeToolName",
+                    "settings.smokeTest.toolSmokeTest.codeToolName",
                 ),
                 code_query_argument=_expect_string(
                     tool_raw.get("codeQueryArgument", "query"),
-                    "smokeTest.toolSmokeTest.codeQueryArgument",
+                    "settings.smokeTest.toolSmokeTest.codeQueryArgument",
                 ),
                 code_queries=[str(item) for item in tool_raw.get("codeQueries", [])],
             ),
@@ -357,7 +415,8 @@ def _parse_project_config(raw: dict[str, Any], config_path: Path) -> ProjectConf
             on_success=_expect_bool(notifications_raw.get("onSuccess"), "notifications.onSuccess"),
             on_failure=_expect_bool(notifications_raw.get("onFailure"), "notifications.onFailure"),
             on_rollback=_expect_bool(notifications_raw.get("onRollback"), "notifications.onRollback"),
-            webhook_url_env=_expect_string(notifications_raw.get("webhookUrlEnv"), "notifications.webhookUrlEnv"),
+            webhook_url_secret=_expect_string(notifications_raw.get("webhookUrlSecret"), "notifications.webhookUrlSecret"),
+            secrets=secrets_values,
         ),
         retention=RetentionConfig(
             keep_previous_indexes=_expect_int(retention_raw.get("keepPreviousIndexes"), "retention.keepPreviousIndexes"),
@@ -367,6 +426,9 @@ def _parse_project_config(raw: dict[str, Any], config_path: Path) -> ProjectConf
         rollback=RollbackConfig(
             preserve_failed_index=bool(rollback_raw.get("preserveFailedIndex", True)),
         ),
+        secrets=secrets_config,
+        secrets_values=secrets_values,
+        settings=settings_config,
         config_path=config_path,
     )
 
@@ -383,21 +445,21 @@ def _validate_project_config(config: ProjectConfig) -> None:
     if config.repo.auth.type not in {"none", "gitlab-token"}:
         raise ConfigValidationError("Field 'repo.auth.type' must be either 'none' or 'gitlab-token'.")
 
-    if config.repo.auth.type == "gitlab-token" and not config.repo.auth.token_env:
-        raise ConfigValidationError("Field 'repo.auth.tokenEnv' must be set when repo.auth.type='gitlab-token'.")
+    if config.repo.auth.type == "gitlab-token" and not config.repo.auth.token_secret:
+        raise ConfigValidationError("Field 'repo.auth.tokenSecret' must be set when repo.auth.type='gitlab-token'.")
 
-    required_paths = {
-        "paths.stagingRoot": config.paths.staging_root,
-        "paths.chromaRoot": config.paths.chroma_root,
-        "paths.stateRoot": config.paths.state_root,
-        "paths.logsRoot": config.paths.logs_root,
-    }
-    for field_name, value in required_paths.items():
-        if not str(value):
-            raise ConfigValidationError(f"Field '{field_name}' must not be empty.")
+    if config.repo.auth.type == "gitlab-token" and config.repo.auth.token_secret not in config.secrets_values:
+        raise ConfigValidationError(f"Git token secret is missing from secrets files: {config.repo.auth.token_secret}")
+
+    if not str(config.paths.root):
+        raise ConfigValidationError("Field 'paths.root' must not be empty.")
 
     if config.mcp.container_port <= 0:
         raise ConfigValidationError("Field 'mcp.containerPort' must be greater than 0.")
+
+    if config.mcp.image not in ALLOWED_MCP_IMAGES:
+        allowed = ", ".join(sorted(ALLOWED_MCP_IMAGES))
+        raise ConfigValidationError(f"Field 'mcp.image' must be one of: {allowed}.")
 
     if config.mcp.production.host_port <= 0:
         raise ConfigValidationError("Field 'mcp.production.hostPort' must be greater than 0.")
@@ -426,6 +488,12 @@ def _validate_project_config(config: ProjectConfig) -> None:
     if config.smoke_test.tool_smoke_test.retry_interval_seconds < 0:
         raise ConfigValidationError("Field 'smokeTest.toolSmokeTest.retryIntervalSeconds' must be greater than or equal to 0.")
 
-    if config.notifications.enabled and (config.notifications.on_failure or config.notifications.on_rollback):
-        if not config.notifications.webhook_url_env:
-            raise ConfigValidationError("Field 'notifications.webhookUrlEnv' must be set when notifications are enabled.")
+    if config.notifications.enabled and (config.notifications.on_success or config.notifications.on_failure or config.notifications.on_rollback):
+        if not config.notifications.webhook_url_secret:
+            raise ConfigValidationError("Field 'notifications.webhookUrlSecret' must be set when notifications are enabled.")
+        if config.notifications.webhook_url_secret not in config.secrets_values:
+            raise ConfigValidationError(f"Notification webhook secret is missing from secrets files: {config.notifications.webhook_url_secret}")
+
+    for secret_name in config.mcp.secret_env.values():
+        if secret_name not in config.secrets_values:
+            raise ConfigValidationError(f"MCP secret is missing from secrets files: {secret_name}")

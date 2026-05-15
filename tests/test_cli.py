@@ -9,6 +9,7 @@ from mcp_project_updater.errors import UpdaterError
 from mcp_project_updater.fingerprints import compute_source_fingerprint
 from mcp_project_updater.git_ops import RepoValidationResult
 from mcp_project_updater.source_detector import detect_sources
+from tests.config_helpers import strip_global_project_blocks, write_runtime_files
 
 
 def _write_config(tmp_path: Path) -> Path:
@@ -16,11 +17,13 @@ def _write_config(tmp_path: Path) -> Path:
     (repo_path / "src" / "cf").mkdir(parents=True)
     parser_path = tmp_path / "generate_config_report.py"
     parser_path.write_text("print('ok')\n", encoding="utf-8")
+    tool_path = tmp_path / "mcp_smoke_test.py"
+    tool_path.write_text("print('ok')\n", encoding="utf-8")
+    write_runtime_files(tmp_path, parser_path=parser_path, tool_path=tool_path)
 
     payload = {
         "project": "orders",
         "repo": {
-            "path": str(repo_path),
             "branch": "master",
             "remote": "origin",
             "pullMode": "ff-only",
@@ -39,7 +42,7 @@ def _write_config(tmp_path: Path) -> Path:
             "allowedExitCodes": [0, 1],
         },
         "mcp": {
-            "image": "example/image:latest",
+            "image": "comol/1c_code_metadata_mcp:light",
             "containerPort": 8000,
             "production": {
                 "containerName": "mcp-orders",
@@ -58,14 +61,11 @@ def _write_config(tmp_path: Path) -> Path:
             "resetCache": False,
             "useSse": False,
             "useGpu": False,
-            "env": {"METADATA_PATH": "/app/metadata", "CODE_PATH": "/app/code"},
-            "secretEnv": {"LICENSE_KEY": "ONERPA_LICENSE_KEY"},
+            "env": {},
+            "secretEnv": {},
         },
         "paths": {
-            "stagingRoot": str(tmp_path / "staging"),
-            "chromaRoot": str(tmp_path / "chroma"),
-            "stateRoot": str(tmp_path / "state"),
-            "logsRoot": str(tmp_path / "logs"),
+            "root": str(tmp_path),
         },
         "smokeTest": {
             "enabled": True,
@@ -104,7 +104,7 @@ def _write_config(tmp_path: Path) -> Path:
             "onSuccess": False,
             "onFailure": True,
             "onRollback": True,
-            "webhookUrlEnv": "MCP_UPDATE_WEBHOOK_URL",
+            "webhookUrlSecret": "MCP_UPDATE_WEBHOOK_URL",
         },
         "retention": {
             "keepPreviousIndexes": 1,
@@ -116,8 +116,7 @@ def _write_config(tmp_path: Path) -> Path:
         },
     }
 
-    tool_path = Path(payload["smokeTest"]["toolSmokeTest"]["toolPath"])
-    tool_path.write_text("print('ok')\n", encoding="utf-8")
+    strip_global_project_blocks(payload)
 
     config_path = tmp_path / "project.json"
     config_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -316,7 +315,7 @@ def _mock_phase2_dependencies(
 ) -> None:
     monkeypatch.setattr(
         "mcp_project_updater.cli.ensure_repo_available",
-        lambda repo, no_git_pull: None,
+        lambda repo, no_git_pull, env=None: None,
     )
     monkeypatch.setattr(
         "mcp_project_updater.cli.validate_repo",
@@ -328,7 +327,7 @@ def _mock_phase2_dependencies(
     )
     monkeypatch.setattr(
         "mcp_project_updater.cli.determine_target_commit",
-        lambda repo, no_git_pull: commit,
+        lambda repo, no_git_pull, env=None: commit,
     )
     if create_report:
         def _fake_run_parser(parser_config, parser_config_path, *, verbose, working_directory):

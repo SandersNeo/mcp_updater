@@ -15,7 +15,8 @@ def _notifications_config() -> NotificationsConfig:
         on_success=False,
         on_failure=True,
         on_rollback=True,
-        webhook_url_env="MCP_UPDATE_WEBHOOK_URL",
+        webhook_url_secret="MCP_UPDATE_WEBHOOK_URL",
+        secrets={"MCP_UPDATE_WEBHOOK_URL": "https://example.invalid"},
     )
 
 
@@ -25,7 +26,8 @@ def test_send_notification_disabled() -> None:
         on_success=False,
         on_failure=True,
         on_rollback=True,
-        webhook_url_env="MCP_UPDATE_WEBHOOK_URL",
+        webhook_url_secret="MCP_UPDATE_WEBHOOK_URL",
+        secrets={},
     )
     send_notification(
         config,
@@ -47,12 +49,13 @@ def test_send_notification_success() -> None:
     assert sent["payload"]["project"] == "orders"
 
 
-def test_send_notification_missing_env_raises() -> None:
+def test_send_notification_missing_secret_raises() -> None:
+    config = _notifications_config()
+    config.secrets = {}
     with pytest.raises(NotificationError):
         send_notification(
-            _notifications_config(),
+            config,
             NotificationPayload("orders", "failed", "parser", "abc", "def", True, False, None, "log"),
-            env={},
         )
 
 

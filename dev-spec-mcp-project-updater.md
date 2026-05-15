@@ -1,5 +1,22 @@
 # Dev Spec: MCP Project Updater
 
+## 0. Authoritative implementation contract
+
+Этот раздел фиксирует актуальную модель реализации и имеет приоритет над более ранними примерами ниже по документу.
+
+- `load_project_config()` читает `project.json`, затем выводит все служебные пути из `paths.root`.
+- `repo.path` не читается из config и всегда равен `<paths.root>/repo`.
+- `paths.staging_root`, `paths.chroma_root`, `paths.state_root`, `paths.logs_root` не читаются из config и всегда равны `<paths.root>/staging`, `<paths.root>/chroma`, `<paths.root>/state`, `<paths.root>/logs`.
+- `parser` и `smokeTest` запрещены в `project.json`; они читаются только из `<paths.root.parent>/settings.global.json`.
+- `settings.global.json` обязан содержать `parser`, `smokeTest`, `smokeTest.toolSmokeTest`; `toolSmokeTest.url` в нем запрещен.
+- `OPENAI_API_BASE` и `OPENAI_MODEL` читаются только из `settings.mcp.env`, а не из project-level `mcp.env`.
+- `mcp.secretEnv` из settings задает mapping container env -> secret name; значения секретов читаются из `<paths.root.parent>/secrets.global.json` и `<paths.root>/secrets.local.json`.
+- GitLab token берется по `repo.auth.tokenSecret` из secrets files.
+- Notification webhook берется по `notifications.webhookUrlSecret` из secrets files.
+- Build tool smoke-test всегда получает URL из `mcp.build.url`.
+- Production tool smoke-test всегда получает URL из `mcp.production.url`.
+- Разрешенные MCP images: `comol/1c_code_metadata_mcp:light` и `comol/1c_code_metadata_mcp:latest`.
+
 ## 1. Назначение
 
 Разработать набор утилит для автоматического обновления MCP-индекса проекта 1С из Git.
@@ -1166,7 +1183,12 @@ tool smoke-test success, если enabled
 previous не создается
 build становится current
 production запускается
+current_commit = target_commit
+last_indexed_commit = target_commit
+previous_commit остается пустым
 ```
+
+Если первый production smoke-test после такого switch падает, automatic rollback восстановить нечего: `previous` baseline еще не существует. В этом случае должен быть поднят `RollbackError` с итоговым exit code `16`.
 
 ---
 
@@ -1198,6 +1220,8 @@ last_indexed_commit не обновлять
 notification rollback
 ```
 
+Prerequisite: `previous` и `chroma/previous` уже существуют. Если это bootstrap-сценарий и baseline еще не создан, automatic rollback невозможен и должен завершаться `RollbackError(ExitCode.ROLLBACK_FAILED)`.
+
 Default:
 
 ```text
@@ -1226,6 +1250,8 @@ python update_mcp_project.py --config <project.json> --rollback
 проверить production smoke
 не менять last_indexed_commit без отдельного будущего флага
 ```
+
+Если `current`/`previous` artifacts или `current_commit`/`previous_commit` отсутствуют, manual rollback должен завершаться ошибкой состояния и не пытаться запускать production switch.
 
 ---
 

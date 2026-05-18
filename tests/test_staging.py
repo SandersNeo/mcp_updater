@@ -141,7 +141,7 @@ def test_generate_and_write_parser_config(tmp_path: Path) -> None:
     assert written["generatorSettingsPath"] == str(build_paths.generator_settings_path)
 
 
-def test_generate_parser_config_uses_null_for_missing_optional_source(tmp_path: Path) -> None:
+def test_generate_parser_config_uses_empty_string_for_missing_optional_source(tmp_path: Path) -> None:
     config_path = _write_config(tmp_path)
     payload = json.loads(config_path.read_text(encoding="utf-8"))
     payload["sources"]["mainConfigPath"] = None
@@ -160,7 +160,7 @@ def test_generate_parser_config_uses_null_for_missing_optional_source(tmp_path: 
 
     parser_config = generate_parser_config(config, build_paths, source_result)
 
-    assert parser_config["mainConfigPath"] is None
+    assert parser_config["mainConfigPath"] == ""
     assert parser_config["extensionPath"] == "src/cfe"
 
 

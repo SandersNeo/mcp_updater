@@ -58,9 +58,9 @@ def generate_parser_config(
     return {
         "project": config.project,
         "repoPath": str(config.repo.path),
-        "mainConfigPath": config.sources.main_config_path if source_result.main_exists else None,
+        "mainConfigPath": config.sources.main_config_path if source_result.main_exists else "",
         "mainConfigRequired": config.sources.main_config_required,
-        "extensionPath": config.sources.extension_path if source_result.extension_exists else None,
+        "extensionPath": config.sources.extension_path if source_result.extension_exists else "",
         "extensionRequired": config.sources.extension_required,
         "outputPath": str(build_paths.metadata),
         "reportFileName": REPORT_FILE_NAME,

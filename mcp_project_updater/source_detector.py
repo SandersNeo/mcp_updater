@@ -21,16 +21,16 @@ class SourceDetectionResult:
 
 def detect_sources(
     repo_path: Path,
-    main_config_path: str,
+    main_config_path: str | None,
     main_config_required: bool,
-    extension_path: str,
+    extension_path: str | None,
     extension_required: bool,
 ) -> SourceDetectionResult:
-    resolved_main_path = repo_path / main_config_path
-    resolved_extension_path = repo_path / extension_path
+    resolved_main_path = repo_path / main_config_path if main_config_path else None
+    resolved_extension_path = repo_path / extension_path if extension_path else None
 
-    main_exists = resolved_main_path.exists()
-    extension_exists = resolved_extension_path.exists()
+    main_exists = resolved_main_path.exists() if resolved_main_path is not None else False
+    extension_exists = resolved_extension_path.exists() if resolved_extension_path is not None else False
 
     if main_config_required and not main_exists:
         raise SourceDetectionError(

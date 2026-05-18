@@ -123,8 +123,15 @@ def test_prepare_build_staging_creates_expected_structure(tmp_path: Path) -> Non
 def test_generate_and_write_parser_config(tmp_path: Path) -> None:
     config = load_project_config(_write_config(tmp_path))
     build_paths = prepare_build_staging(config.paths.staging_root, config.project)
+    source_result = detect_sources(
+        config.repo.path,
+        config.sources.main_config_path,
+        config.sources.main_config_required,
+        config.sources.extension_path,
+        config.sources.extension_required,
+    )
 
-    parser_config = generate_parser_config(config, build_paths)
+    parser_config = generate_parser_config(config, build_paths, source_result)
     parser_config_path = write_parser_config(build_paths, parser_config)
     written = json.loads(parser_config_path.read_text(encoding="utf-8"))
 
@@ -132,6 +139,29 @@ def test_generate_and_write_parser_config(tmp_path: Path) -> None:
     assert written["diagnosticsPath"] == str(build_paths.diagnostics)
     assert written["logsPath"] == str(build_paths.logs)
     assert written["generatorSettingsPath"] == str(build_paths.generator_settings_path)
+
+
+def test_generate_parser_config_uses_null_for_missing_optional_source(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    payload["sources"]["mainConfigPath"] = None
+    payload["sources"]["mainConfigRequired"] = False
+    config_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    config = load_project_config(config_path)
+    build_paths = prepare_build_staging(config.paths.staging_root, config.project)
+    source_result = detect_sources(
+        config.repo.path,
+        config.sources.main_config_path,
+        config.sources.main_config_required,
+        config.sources.extension_path,
+        config.sources.extension_required,
+    )
+
+    parser_config = generate_parser_config(config, build_paths, source_result)
+
+    assert parser_config["mainConfigPath"] is None
+    assert parser_config["extensionPath"] == "src/cfe"
 
 
 def test_prepare_build_code_directory_copies_existing_sources(tmp_path: Path) -> None:

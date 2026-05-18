@@ -813,6 +813,14 @@ src/cf есть или src/cfe есть
 → продолжить
 ```
 
+Поддерживаются сценарии:
+
+```text
+main + extension
+extension-only: mainConfigPath = null, mainConfigRequired = false
+main-only: extensionPath = null, extensionRequired = false
+```
+
 ### FR-005. Подготовка CODE_PATH
 
 Updater должен собрать `build/code` только из существующих источников:
@@ -867,6 +875,8 @@ staging/build/parser-config.json
   "generatorSettingsPath": "E:/mcp-1c/staging/orders/build/settings/orders.xml-overrides.json"
 }
 ```
+
+Если один из источников фактически отсутствует и не required, updater должен передавать в parser config `null`, а не фиктивный путь.
 
 ### FR-007. generatorSettingsPath обязателен для updater-а
 

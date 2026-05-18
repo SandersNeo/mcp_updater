@@ -376,6 +376,32 @@ update-mcp-project.ps1
 }
 ```
 
+Допустимы также:
+
+```json
+{
+  "sources": {
+    "mainConfigPath": null,
+    "mainConfigRequired": false,
+    "extensionPath": "src/cfe",
+    "extensionRequired": true
+  }
+}
+```
+
+и
+
+```json
+{
+  "sources": {
+    "mainConfigPath": "src/cf",
+    "mainConfigRequired": true,
+    "extensionPath": null,
+    "extensionRequired": false
+  }
+}
+```
+
 ### 5.2. Config validation
 
 `config.py` должен проверять:

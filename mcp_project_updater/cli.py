@@ -192,7 +192,7 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
 
         stage = "staging"
         build_paths = prepare_build_staging(config.paths.staging_root, config.project)
-        parser_config_payload = generate_parser_config(config, build_paths)
+        parser_config_payload = generate_parser_config(config, build_paths, source_result)
         parser_config_path = write_parser_config(build_paths, parser_config_payload)
         stage = "parser"
         parser_result = run_parser(

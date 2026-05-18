@@ -279,3 +279,53 @@ def test_http_ready_url_is_not_required_anymore(tmp_path: Path) -> None:
     config = load_project_config(config_path)
 
     assert config.smoke_test.infrastructure.acceptable_http_status_codes == [200, 400, 404, 405]
+
+
+def test_extension_only_project_is_allowed(tmp_path: Path) -> None:
+    payload = _base_payload()
+    payload["sources"]["mainConfigPath"] = None
+    payload["sources"]["mainConfigRequired"] = False
+    payload["sources"]["extensionPath"] = "src/cfe"
+    payload["sources"]["extensionRequired"] = True
+    config_path = _write_config(tmp_path, payload)
+
+    config = load_project_config(config_path)
+
+    assert config.sources.main_config_path is None
+    assert config.sources.extension_path == "src/cfe"
+
+
+def test_main_only_project_is_allowed(tmp_path: Path) -> None:
+    payload = _base_payload()
+    payload["sources"]["mainConfigPath"] = "src/cf"
+    payload["sources"]["mainConfigRequired"] = True
+    payload["sources"]["extensionPath"] = None
+    payload["sources"]["extensionRequired"] = False
+    config_path = _write_config(tmp_path, payload)
+
+    config = load_project_config(config_path)
+
+    assert config.sources.main_config_path == "src/cf"
+    assert config.sources.extension_path is None
+
+
+def test_required_main_source_path_must_be_configured(tmp_path: Path) -> None:
+    payload = _base_payload()
+    payload["sources"]["mainConfigPath"] = None
+    payload["sources"]["mainConfigRequired"] = True
+    config_path = _write_config(tmp_path, payload)
+
+    with pytest.raises(ConfigValidationError):
+        load_project_config(config_path)
+
+
+def test_at_least_one_source_path_must_be_configured(tmp_path: Path) -> None:
+    payload = _base_payload()
+    payload["sources"]["mainConfigPath"] = None
+    payload["sources"]["mainConfigRequired"] = False
+    payload["sources"]["extensionPath"] = None
+    payload["sources"]["extensionRequired"] = False
+    config_path = _write_config(tmp_path, payload)
+
+    with pytest.raises(ConfigValidationError):
+        load_project_config(config_path)

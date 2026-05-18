@@ -24,6 +24,12 @@ pip install -e .
 
 Все общие настройки, включая `parser`, `smokeTest`, `toolSmokeTest`, `OPENAI_API_BASE`, `OPENAI_MODEL` и mapping секретов контейнера, лежат в `<data-root>/settings.global.json`.
 
+Блок `sources` поддерживает три сценария:
+
+- main + extension: заданы оба пути;
+- extension-only: `mainConfigPath=null`, `mainConfigRequired=false`;
+- main-only: `extensionPath=null`, `extensionRequired=false`.
+
 В `project.json` задается только корень проекта:
 
 ```json

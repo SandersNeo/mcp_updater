@@ -96,9 +96,9 @@ class RepoConfig:
 
 @dataclass(slots=True)
 class SourcesConfig:
-    main_config_path: str
+    main_config_path: str | None
     main_config_required: bool
-    extension_path: str
+    extension_path: str | None
     extension_required: bool
 
 
@@ -263,6 +263,8 @@ def _parse_project_config(raw: dict[str, Any], config_path: Path) -> ProjectConf
     notifications_raw = _expect_mapping(raw.get("notifications"), "notifications")
     retention_raw = _expect_mapping(raw.get("retention"), "retention")
     rollback_raw = _expect_mapping(raw.get("rollback", {}), "rollback")
+    main_config_required = _expect_bool(sources_raw.get("mainConfigRequired"), "sources.mainConfigRequired")
+    extension_required = _expect_bool(sources_raw.get("extensionRequired"), "sources.extensionRequired")
 
     tool_timeout_seconds = _expect_int(tool_raw.get("timeoutSeconds"), "settings.smokeTest.toolSmokeTest.timeoutSeconds")
     if "url" in tool_raw:
@@ -310,10 +312,10 @@ def _parse_project_config(raw: dict[str, Any], config_path: Path) -> ProjectConf
             ),
         ),
         sources=SourcesConfig(
-            main_config_path=_expect_string(sources_raw.get("mainConfigPath"), "sources.mainConfigPath"),
-            main_config_required=_expect_bool(sources_raw.get("mainConfigRequired"), "sources.mainConfigRequired"),
-            extension_path=_expect_string(sources_raw.get("extensionPath"), "sources.extensionPath"),
-            extension_required=_expect_bool(sources_raw.get("extensionRequired"), "sources.extensionRequired"),
+            main_config_path=_expect_optional_string(sources_raw.get("mainConfigPath"), "sources.mainConfigPath"),
+            main_config_required=main_config_required,
+            extension_path=_expect_optional_string(sources_raw.get("extensionPath"), "sources.extensionPath"),
+            extension_required=extension_required,
         ),
         parser=ParserConfig(
             tool_path=_expect_path_string(parser_raw.get("toolPath"), "settings.parser.toolPath"),
@@ -453,6 +455,15 @@ def _validate_project_config(config: ProjectConfig) -> None:
 
     if not str(config.paths.root):
         raise ConfigValidationError("Field 'paths.root' must not be empty.")
+
+    if config.sources.main_config_required and not config.sources.main_config_path:
+        raise ConfigValidationError("Field 'sources.mainConfigPath' must be set when sources.mainConfigRequired=true.")
+
+    if config.sources.extension_required and not config.sources.extension_path:
+        raise ConfigValidationError("Field 'sources.extensionPath' must be set when sources.extensionRequired=true.")
+
+    if not config.sources.main_config_path and not config.sources.extension_path:
+        raise ConfigValidationError("At least one of sources.mainConfigPath or sources.extensionPath must be set.")
 
     if config.mcp.container_port <= 0:
         raise ConfigValidationError("Field 'mcp.containerPort' must be greater than 0.")

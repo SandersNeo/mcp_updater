@@ -50,13 +50,17 @@ def prepare_build_staging(staging_root: Path, project_name: str) -> BuildPaths:
     )
 
 
-def generate_parser_config(config: ProjectConfig, build_paths: BuildPaths) -> dict[str, object]:
+def generate_parser_config(
+    config: ProjectConfig,
+    build_paths: BuildPaths,
+    source_result: SourceDetectionResult,
+) -> dict[str, object]:
     return {
         "project": config.project,
         "repoPath": str(config.repo.path),
-        "mainConfigPath": config.sources.main_config_path,
+        "mainConfigPath": config.sources.main_config_path if source_result.main_exists else None,
         "mainConfigRequired": config.sources.main_config_required,
-        "extensionPath": config.sources.extension_path,
+        "extensionPath": config.sources.extension_path if source_result.extension_exists else None,
         "extensionRequired": config.sources.extension_required,
         "outputPath": str(build_paths.metadata),
         "reportFileName": REPORT_FILE_NAME,

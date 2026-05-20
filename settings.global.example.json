@@ -33,16 +33,13 @@
       "checkIntervalSeconds": 5,
       "acceptableHttpStatusCodes": [200, 400, 404, 405],
       "requireChromaNotEmpty": true,
-      "logTailLines": 200,
+      "logTailLines": 2000,
       "logErrorPatterns": [
         "Traceback",
         "Unhandled exception",
         "CRITICAL"
       ],
-      "logReadyPatterns": [
-        "Started",
-        "Application startup complete"
-      ]
+      "logReadyPatterns": []
     },
     "toolSmokeTest": {
       "enabled": true,

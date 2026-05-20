@@ -8,7 +8,13 @@ import pytest
 from mcp_project_updater.config import load_project_config
 from mcp_project_updater.constants import ExitCode
 from mcp_project_updater.docker_ops import DockerCommandResult
-from mcp_project_updater.mcp_container import MissingSecretEnvError, build_build_container_command, prepare_chroma_build, start_build_container
+from mcp_project_updater.mcp_container import (
+    MissingSecretEnvError,
+    build_build_container_command,
+    build_production_container_command,
+    prepare_chroma_build,
+    start_build_container,
+)
 from mcp_project_updater.staging import prepare_build_staging
 from tests.config_helpers import strip_global_project_blocks, write_runtime_files
 
@@ -154,7 +160,7 @@ def test_start_build_container_runs_remove_and_run(tmp_path: Path, monkeypatch) 
 
     assert result.container_id == "container-id"
     assert calls[0][:3] == ["docker", "rm", "-f"]
-    assert calls[1][:3] == ["docker", "run", "-d"]
+    assert calls[1][:4] == ["docker", "run", "-d", "--init"]
     assert any(part == "RESET_DATABASE=true" for part in calls[1])
     assert any(part == "INDEX_METADATA=true" for part in calls[1])
     assert any(part == "INDEX_CODE=true" for part in calls[1])
@@ -185,5 +191,17 @@ def test_start_build_container_can_disable_metadata_and_seed_from_current(tmp_pa
     )
 
     assert (config.paths.chroma_root / "build" / "db.bin").read_text(encoding="utf-8") == "seed"
+    assert calls[1][:4] == ["docker", "run", "-d", "--init"]
     assert any(part == "RESET_DATABASE=false" for part in calls[1])
     assert any(part == "INDEX_METADATA=false" for part in calls[1])
+
+
+def test_build_production_container_command_uses_restart_policy(tmp_path: Path) -> None:
+    config = load_project_config(_write_config(tmp_path))
+
+    command = build_production_container_command(config.mcp, config.paths)
+
+    assert command[:4] == ["docker", "run", "-d", "--init"]
+    assert "--restart" in command
+    restart_index = command.index("--restart")
+    assert command[restart_index + 1] == "unless-stopped"

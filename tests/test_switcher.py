@@ -182,3 +182,35 @@ def test_perform_switch_failed_production_smoke_triggers_rollback(tmp_path: Path
         )
 
     assert called["rollback"] is True
+
+
+def test_perform_switch_continues_when_build_container_cannot_be_removed(tmp_path: Path, monkeypatch, caplog) -> None:
+    config = load_project_config(_write_config(tmp_path))
+    state_store = StateStore(config.paths.state_root)
+    (config.paths.staging_root / "build" / "metadata").mkdir(parents=True)
+    (config.paths.staging_root / "build" / "metadata" / "Report.txt").write_text("x", encoding="utf-8")
+    (config.paths.chroma_root / "build").mkdir(parents=True)
+    (config.paths.chroma_root / "build" / "db.bin").write_text("x", encoding="utf-8")
+
+    def runner(command, cwd):
+        if command == ["docker", "rm", "-f", config.mcp.production.container_name]:
+            return DockerCommandResult(1, "", "No such container")
+        if command == ["docker", "rm", "-f", config.mcp.build.container_name]:
+            return DockerCommandResult(1, "", "container pid is zombie and can not be killed")
+        return DockerCommandResult(0, "", "")
+
+    monkeypatch.setattr("mcp_project_updater.switcher.start_production_container", lambda *args, **kwargs: None)
+    monkeypatch.setattr("mcp_project_updater.switcher.write_container_logs", lambda *args, **kwargs: None)
+
+    with caplog.at_level("WARNING"):
+        perform_switch(
+            config,
+            state_store,
+            "abc123",
+            tmp_path / "production.log",
+            docker_runner=runner,
+            production_smoke_runner=lambda current_config: object(),
+        )
+
+    assert state_store.read_current_commit() == "abc123"
+    assert "Failed to remove build container" in caplog.text

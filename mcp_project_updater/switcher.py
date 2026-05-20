@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +36,9 @@ class ProductionSmokeTestResult:
 class SwitchResult:
     target_commit: str
     production_log_path: Path
+
+
+logger = logging.getLogger(__name__)
 
 
 def run_production_smoke_test(
@@ -91,7 +95,7 @@ def perform_switch(
     old_current_commit = state_store.read_current_commit()
 
     remove_container(config.mcp.production.container_name, runner=docker_runner, error_code=ExitCode.PRODUCTION_SWITCH_FAILED)
-    remove_container(config.mcp.build.container_name, runner=docker_runner, error_code=ExitCode.PRODUCTION_SWITCH_FAILED)
+    _remove_build_container_best_effort(config, docker_runner)
 
     _remove_if_exists(previous_staging)
     _remove_if_exists(previous_chroma)
@@ -140,3 +144,14 @@ def _remove_if_exists(path: Path) -> None:
         shutil.rmtree(path)
     elif path.exists():
         path.unlink()
+
+
+def _remove_build_container_best_effort(config: ProjectConfig, docker_runner: DockerCommandRunner) -> None:
+    try:
+        remove_container(config.mcp.build.container_name, runner=docker_runner, error_code=ExitCode.PRODUCTION_SWITCH_FAILED)
+    except UpdaterError as exc:
+        logger.warning(
+            "Failed to remove build container '%s' before production switch; continuing: %s",
+            config.mcp.build.container_name,
+            exc,
+        )

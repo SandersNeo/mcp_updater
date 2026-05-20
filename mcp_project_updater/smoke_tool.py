@@ -52,10 +52,14 @@ def build_tool_smoke_config_payload(
     url: str,
     attempt_timeout_seconds: int | None = None,
 ) -> dict[str, object]:
+    per_attempt_timeout = attempt_timeout_seconds or tool_smoke_config.attempt_timeout_seconds
+    overall_timeout_seconds = (
+        tool_smoke_config.timeout_seconds if tool_smoke_config.timeout_seconds > 0 else per_attempt_timeout
+    )
     return {
         "url": url,
-        "timeoutSeconds": attempt_timeout_seconds or tool_smoke_config.attempt_timeout_seconds,
-        "overallTimeoutSeconds": tool_smoke_config.timeout_seconds,
+        "timeoutSeconds": per_attempt_timeout,
+        "overallTimeoutSeconds": overall_timeout_seconds,
         "indexCode": config.mcp.index_code,
         "diagnostic": tool_smoke_config.diagnostic,
         "metadataToolName": tool_smoke_config.metadata_tool_name,
@@ -81,14 +85,17 @@ def run_tool_smoke_test(
     runner: ProcessRunner = default_process_runner,
     url: str,
 ) -> ToolSmokeRunResult:
-    deadline = time.monotonic() + tool_smoke_config.timeout_seconds
+    deadline = time.monotonic() + tool_smoke_config.timeout_seconds if tool_smoke_config.timeout_seconds > 0 else None
     attempts = 0
     last_result: ToolSmokeRunResult | None = None
 
     while True:
         attempts += 1
-        remaining_seconds = max(1, math.ceil(deadline - time.monotonic()))
-        attempt_timeout_seconds = min(tool_smoke_config.attempt_timeout_seconds, remaining_seconds)
+        if deadline is None:
+            attempt_timeout_seconds = tool_smoke_config.attempt_timeout_seconds
+        else:
+            remaining_seconds = max(1, math.ceil(deadline - time.monotonic()))
+            attempt_timeout_seconds = min(tool_smoke_config.attempt_timeout_seconds, remaining_seconds)
         payload = build_tool_smoke_config_payload(
             config,
             tool_smoke_config,
@@ -114,10 +121,13 @@ def run_tool_smoke_test(
             raise ToolSmokeTestError(details, ExitCode.BUILD_SMOKE_FAILED)
 
         last_result = result
-        remaining_after_attempt = deadline - time.monotonic()
-        if remaining_after_attempt <= 0:
-            break
-        sleep_seconds = min(tool_smoke_config.retry_interval_seconds, math.floor(remaining_after_attempt))
+        if deadline is None:
+            sleep_seconds = tool_smoke_config.retry_interval_seconds
+        else:
+            remaining_after_attempt = deadline - time.monotonic()
+            if remaining_after_attempt <= 0:
+                break
+            sleep_seconds = min(tool_smoke_config.retry_interval_seconds, math.floor(remaining_after_attempt))
         if sleep_seconds > 0:
             time.sleep(sleep_seconds)
 

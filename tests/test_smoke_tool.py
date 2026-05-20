@@ -122,6 +122,16 @@ def test_build_tool_smoke_config_payload_uses_defaults(tmp_path: Path) -> None:
     assert payload["overallTimeoutSeconds"] == 300
 
 
+def test_build_tool_smoke_config_payload_uses_attempt_timeout_when_overall_deadline_disabled(tmp_path: Path) -> None:
+    config = load_project_config(_write_config(tmp_path))
+    config.smoke_test.tool_smoke_test.timeout_seconds = 0
+
+    payload = build_tool_smoke_config_payload(config, config.smoke_test.tool_smoke_test, url=config.mcp.build.url)
+
+    assert payload["timeoutSeconds"] == 60
+    assert payload["overallTimeoutSeconds"] == 60
+
+
 def test_run_tool_smoke_test_invokes_cli(tmp_path: Path) -> None:
     config = load_project_config(_write_config(tmp_path))
     calls = []
@@ -226,6 +236,40 @@ def test_run_tool_smoke_test_retries_timeout_until_success(tmp_path: Path, monke
                 cmd=kwargs.get("args", args[0] if args else "python"),
                 timeout=60,
                 stderr=b"[diagnostic] call_tool:start name=codesearch query='x'",
+            )
+        return subprocess.CompletedProcess(args[0], 0, stdout='{"ok":true}', stderr="")
+
+    monkeypatch.setattr("mcp_project_updater.smoke_tool.subprocess.run", _fake_run)
+    monkeypatch.setattr("mcp_project_updater.smoke_tool.time.monotonic", clock.monotonic)
+    monkeypatch.setattr("mcp_project_updater.smoke_tool.time.sleep", clock.sleep)
+
+    result = run_tool_smoke_test(
+        config,
+        config.smoke_test.tool_smoke_test,
+        working_directory=config.repo.path,
+        url=config.mcp.build.url,
+    )
+
+    assert result.returncode == 0
+    assert attempts["count"] == 3
+
+
+def test_run_tool_smoke_test_without_overall_timeout_retries_until_success(tmp_path: Path, monkeypatch) -> None:
+    config = load_project_config(_write_config(tmp_path))
+    config.smoke_test.tool_smoke_test.timeout_seconds = 0
+    config.smoke_test.tool_smoke_test.attempt_timeout_seconds = 1
+    config.smoke_test.tool_smoke_test.retry_interval_seconds = 1
+    attempts = {"count": 0}
+    clock = _FakeClock()
+
+    def _fake_run(*args, **kwargs):
+        attempts["count"] += 1
+        clock.current += kwargs["timeout"]
+        if attempts["count"] < 3:
+            raise subprocess.TimeoutExpired(
+                cmd=kwargs.get("args", args[0] if args else "python"),
+                timeout=60,
+                stderr=b"[diagnostic] list_tools:start",
             )
         return subprocess.CompletedProcess(args[0], 0, stdout='{"ok":true}', stderr="")
 

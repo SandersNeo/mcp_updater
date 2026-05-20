@@ -255,9 +255,17 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
 
         if config.smoke_test.tool_smoke_test.enabled:
             stage = "build_tool_smoke"
+            tool_smoke_config = _build_tool_smoke_config_for_update(
+                config,
+                last_indexed_commit_at_start=last_indexed_commit_at_start,
+            )
+            if tool_smoke_config.timeout_seconds <= 0:
+                logger.info(
+                    "Initial bootstrap detected: build tool smoke-test overall timeout disabled; retrying until MCP tools respond."
+                )
             tool_smoke_result = run_tool_smoke_test(
                 config,
-                config.smoke_test.tool_smoke_test,
+                tool_smoke_config,
                 working_directory=config.repo.path,
                 url=config.mcp.build.url,
             )
@@ -528,6 +536,16 @@ def _existing_build_paths(config: ProjectConfig) -> BuildPaths:
         report_path=metadata / REPORT_FILE_NAME,
         generator_settings_path=settings / f"{config.project}.xml-overrides.json",
     )
+
+
+def _build_tool_smoke_config_for_update(
+    config: ProjectConfig,
+    *,
+    last_indexed_commit_at_start: str | None,
+):
+    if last_indexed_commit_at_start is None and config.smoke_test.tool_smoke_test.timeout_seconds > 0:
+        return replace(config.smoke_test.tool_smoke_test, timeout_seconds=0)
+    return config.smoke_test.tool_smoke_test
 
 
 def _handle_success_notification_and_cleanup(

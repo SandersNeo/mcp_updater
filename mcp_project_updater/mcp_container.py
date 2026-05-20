@@ -66,6 +66,7 @@ def build_runtime_container_command(
     index_metadata: bool,
     index_code: bool,
     index_help: bool,
+    restart_policy: str | None = None,
 ) -> list[str]:
     resolved_secret_env = resolve_secret_environment(mcp_config.secret_env, mcp_config.secrets)
     container_env = build_container_environment(
@@ -85,9 +86,13 @@ def build_runtime_container_command(
         "docker",
         "run",
         "-d",
+        "--init",
         "--name",
         instance_config.container_name,
     ]
+
+    if restart_policy:
+        command.extend(["--restart", restart_policy])
 
     for key, value in container_env.items():
         command.extend(["-e", f"{key}={value}"])
@@ -131,6 +136,7 @@ def build_build_container_command(
         index_metadata=index_metadata,
         index_code=index_code,
         index_help=index_help,
+        restart_policy=None,
     )
 
 
@@ -148,6 +154,7 @@ def build_production_container_command(
         index_metadata=mcp_config.index_metadata,
         index_code=mcp_config.index_code,
         index_help=mcp_config.index_help,
+        restart_policy="unless-stopped",
     )
 
 

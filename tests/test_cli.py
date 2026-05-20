@@ -190,6 +190,29 @@ def test_main_returns_success_when_no_changes_and_not_forced(tmp_path: Path, mon
     assert result == ExitCode.SUCCESS
 
 
+def test_main_disables_build_tool_smoke_timeout_on_initial_bootstrap(tmp_path: Path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    seen = {"timeout_seconds": None}
+
+    _mock_phase2_dependencies(
+        monkeypatch,
+        create_report=True,
+        complete_phase4=True,
+        complete_phase6=True,
+    )
+
+    def _fake_tool_smoke(config, tool_smoke_config, working_directory, url):
+        seen["timeout_seconds"] = tool_smoke_config.timeout_seconds
+        return type("ToolSmokeResult", (), {"stdout": '{"ok":true}'})()
+
+    monkeypatch.setattr("mcp_project_updater.cli.run_tool_smoke_test", _fake_tool_smoke)
+
+    result = main(["--config", str(config_path)])
+
+    assert result == ExitCode.SUCCESS
+    assert seen["timeout_seconds"] == 0
+
+
 def test_main_promotes_existing_build(tmp_path: Path, monkeypatch) -> None:
     config_path = _write_config(tmp_path)
     build_report = tmp_path / "staging" / "build" / "metadata" / "Report.txt"

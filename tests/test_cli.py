@@ -213,6 +213,58 @@ def test_main_disables_build_tool_smoke_timeout_on_initial_bootstrap(tmp_path: P
     assert seen["timeout_seconds"] == 0
 
 
+def test_main_reuses_current_chroma_for_build_when_metadata_changed(tmp_path: Path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    current_report = tmp_path / "staging" / "current" / "metadata" / "Report.txt"
+    current_report.parent.mkdir(parents=True, exist_ok=True)
+    current_report.write_text(
+        '\t- РљРѕРЅС„РёРіСѓСЂР°С†РёРё.Orders\nРРјСЏ: "Orders"\nРЎРёРЅРѕРЅРёРј: "Orders"\n',
+        encoding="utf-8",
+    )
+    current_chroma = tmp_path / "chroma" / "current"
+    current_chroma.mkdir(parents=True, exist_ok=True)
+    (current_chroma / "db.bin").write_text("seed", encoding="utf-8")
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "state" / "last_report_hash").write_text("different-report-hash\n", encoding="utf-8")
+
+    captured = {}
+    _mock_phase2_dependencies(monkeypatch, create_report=True)
+    monkeypatch.setattr("mcp_project_updater.cli.ensure_docker_available", lambda: "26.1.0")
+
+    def _fake_start_build_container(mcp_config, build_paths, paths_config, runner, **kwargs):
+        captured.update(kwargs)
+        return type("BuildContainerResult", (), {"command": ["docker", "run"], "container_id": "cid"})()
+
+    monkeypatch.setattr("mcp_project_updater.cli.start_build_container", _fake_start_build_container)
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.run_infrastructure_smoke_test",
+        lambda smoke_config, context, runner: type("SmokeResult", (), {"http_status_code": 404})(),
+    )
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.run_tool_smoke_test",
+        lambda config, tool_smoke_config, working_directory, url: type("ToolSmokeResult", (), {"stdout": '{"ok":true}'})(),
+    )
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.write_container_logs",
+        lambda container_name, output_path, runner: output_path,
+    )
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.perform_switch",
+        lambda config, state_store, target_commit, production_log_path, docker_runner: type(
+            "SwitchResult",
+            (),
+            {"target_commit": target_commit, "production_log_path": production_log_path},
+        )(),
+    )
+
+    result = main(["--config", str(config_path)])
+
+    assert result == ExitCode.SUCCESS
+    assert captured["reset_database"] is False
+    assert captured["seed_chroma_from"] == current_chroma
+    assert captured["index_metadata"] is None
+
+
 def test_main_promotes_existing_build(tmp_path: Path, monkeypatch) -> None:
     config_path = _write_config(tmp_path)
     build_report = tmp_path / "staging" / "build" / "metadata" / "Report.txt"

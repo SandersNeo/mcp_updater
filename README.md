@@ -286,6 +286,8 @@ Production tool smoke-test не должен использовать build URL.
 - `attemptTimeoutSeconds` - лимит одной попытки;
 - `retryIntervalSeconds` - пауза между попытками.
 
+Для обычного update build теперь переиспользует `chroma/current` как baseline для инкрементальной индексации, если production baseline существует и запуск не идет с `--force`. Это относится и к случаям, когда `Report.txt` изменился: metadata phase все равно выполняется, но code/help получают предыдущий `file_tracker` вместо пустой базы.
+
 Для build container с длинными и шумными логами не стоит полагаться на `logReadyPatterns`: startup-сообщения могут быстро уйти из log tail, и infrastructure smoke упадет, хотя контейнер уже работает нормально. Практически безопасная рекомендация:
 
 ```json

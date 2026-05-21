@@ -12,6 +12,7 @@ from mcp_project_updater.mcp_container import (
     MissingSecretEnvError,
     build_build_container_command,
     build_production_container_command,
+    format_container_command_for_log,
     prepare_chroma_build,
     start_build_container,
 )
@@ -205,3 +206,28 @@ def test_build_production_container_command_uses_restart_policy(tmp_path: Path) 
     assert "--restart" in command
     restart_index = command.index("--restart")
     assert command[restart_index + 1] == "unless-stopped"
+
+
+def test_format_container_command_for_log_redacts_sensitive_environment_values() -> None:
+    command = [
+        "docker",
+        "run",
+        "-e",
+        "INDEX_HELP=false",
+        "-e",
+        "OPENAI_API_KEY=secret-value",
+        "-e",
+        "LICENSE_KEY=license-value",
+        "-e",
+        "NORMAL=value",
+        "image:latest",
+    ]
+
+    formatted = format_container_command_for_log(command)
+
+    assert "INDEX_HELP=false" in formatted
+    assert "OPENAI_API_KEY=<redacted>" in formatted
+    assert "LICENSE_KEY=<redacted>" in formatted
+    assert "NORMAL=value" in formatted
+    assert "secret-value" not in formatted
+    assert "license-value" not in formatted

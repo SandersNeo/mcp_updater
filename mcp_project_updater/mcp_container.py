@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import shlex
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +11,8 @@ from .constants import ExitCode
 from .docker_ops import DockerCommandResult, DockerCommandRunner, remove_container, run_docker_command
 from .errors import UpdaterError
 from .staging import BuildPaths
+
+logger = logging.getLogger(__name__)
 
 
 class MissingSecretEnvError(UpdaterError):
@@ -53,6 +57,20 @@ def build_container_environment(mcp_config: MCPConfig, extra_env: dict[str, str]
     environment = {str(key): str(value) for key, value in mcp_config.env.items()}
     environment.update(extra_env)
     return environment
+
+
+def format_container_command_for_log(command: list[str]) -> str:
+    sanitized: list[str] = []
+    redact_next_env = False
+    for part in command:
+        if redact_next_env:
+            sanitized.append(_redact_env_assignment(part))
+            redact_next_env = False
+            continue
+        sanitized.append(part)
+        if part == "-e":
+            redact_next_env = True
+    return shlex.join(sanitized)
 
 
 def build_runtime_container_command(
@@ -165,6 +183,15 @@ def start_production_container(
     runner: DockerCommandRunner,
 ) -> ContainerStartResult:
     command = build_production_container_command(mcp_config, paths_config)
+    logger.info(
+        "Starting production container '%s' with flags: reset_database=%s index_metadata=%s index_code=%s index_help=%s",
+        mcp_config.production.container_name,
+        False,
+        mcp_config.index_metadata,
+        mcp_config.index_code,
+        mcp_config.index_help,
+    )
+    logger.info("Production container command: %s", format_container_command_for_log(command))
     result = run_docker_command(
         command,
         runner=runner,
@@ -186,6 +213,10 @@ def start_build_container(
     index_code: bool | None = None,
     index_help: bool | None = None,
 ) -> BuildContainerStartResult:
+    effective_reset_database = mcp_config.reset_database_on_build if reset_database is None else reset_database
+    effective_index_metadata = mcp_config.index_metadata if index_metadata is None else index_metadata
+    effective_index_code = mcp_config.index_code if index_code is None else index_code
+    effective_index_help = mcp_config.index_help if index_help is None else index_help
     prepare_chroma_build(paths_config.chroma_root, seed_source=seed_chroma_from)
     remove_container(
         mcp_config.build.container_name,
@@ -196,11 +227,21 @@ def start_build_container(
         mcp_config,
         build_paths,
         paths_config,
-        reset_database=mcp_config.reset_database_on_build if reset_database is None else reset_database,
-        index_metadata=mcp_config.index_metadata if index_metadata is None else index_metadata,
-        index_code=mcp_config.index_code if index_code is None else index_code,
-        index_help=mcp_config.index_help if index_help is None else index_help,
+        reset_database=effective_reset_database,
+        index_metadata=effective_index_metadata,
+        index_code=effective_index_code,
+        index_help=effective_index_help,
     )
+    logger.info(
+        "Starting build container '%s' with flags: reset_database=%s index_metadata=%s index_code=%s index_help=%s seed_chroma_from=%s",
+        mcp_config.build.container_name,
+        effective_reset_database,
+        effective_index_metadata,
+        effective_index_code,
+        effective_index_help,
+        str(seed_chroma_from) if seed_chroma_from is not None else "<none>",
+    )
+    logger.info("Build container command: %s", format_container_command_for_log(command))
     result = run_docker_command(
         command,
         runner=runner,
@@ -212,3 +253,18 @@ def start_build_container(
 
 def _bool_to_env(value: bool) -> str:
     return "true" if value else "false"
+
+
+def _redact_env_assignment(assignment: str) -> str:
+    if "=" not in assignment:
+        return assignment
+    key, _, value = assignment.partition("=")
+    if _should_redact_env_key(key):
+        return f"{key}=<redacted>"
+    return assignment
+
+
+def _should_redact_env_key(key: str) -> bool:
+    normalized = key.upper()
+    sensitive_markers = ("SECRET", "TOKEN", "PASSWORD", "API_KEY", "WEBHOOK", "LICENSE")
+    return any(marker in normalized for marker in sensitive_markers)

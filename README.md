@@ -390,6 +390,89 @@ python .\mcp_smoke_test.py `
 
 Во время `--promote-existing-build` updater по-прежнему строго требует удалить старый production container, если он существует, но удаление `mcp-...-build` теперь best-effort. Если build container залип, например из-за zombie process внутри старого запуска, promote пишет warning и продолжает production switch.
 
+## Manual Image Upgrade
+
+Если нужно обновить production container на новую версию MCP image без `build`, данные переносить из старого image не нужно. Production baseline хранится не в image, а в примонтированных каталогах:
+
+- `staging/current/metadata -> /app/metadata`
+- `staging/current/code -> /app/code`
+- `chroma/current -> /app/chroma_db`
+
+Безопасный ручной сценарий:
+
+1. Сначала сохранить текущую конфигурацию container:
+
+```powershell
+docker inspect mcp-upp --format "{{.Config.Image}}"
+docker inspect mcp-upp --format "{{json .HostConfig.PortBindings}}"
+docker inspect mcp-upp --format "{{range .Mounts}}{{println .Source ' -> ' .Destination}}{{end}}"
+docker inspect mcp-upp --format "{{range .Config.Env}}{{println .}}{{end}}"
+```
+
+2. Сделать backup production baseline:
+
+```powershell
+robocopy C:\mcp-updater-data\upp\chroma\current C:\mcp-updater-data\upp\backup\chroma-current /E
+robocopy C:\mcp-updater-data\upp\staging\current C:\mcp-updater-data\upp\backup\staging-current /E
+```
+
+3. Скачать новый image:
+
+```powershell
+docker pull comol/1c_code_metadata_mcp:<new-tag>
+```
+
+4. Остановить текущий production container и сохранить его как rollback baseline:
+
+```powershell
+docker stop mcp-upp
+docker rename mcp-upp mcp-upp-old
+```
+
+5. Поднять новый production container на тех же host volumes. Важно:
+
+- не запускать старый и новый container одновременно на одном `chroma/current`;
+- оставить `RESET_DATABASE=false`;
+- использовать те же ports, mounts и env values, что были у старого container.
+
+Шаблон:
+
+```powershell
+docker run -d --init --name mcp-upp --restart unless-stopped `
+  -e RESET_DATABASE=false `
+  -e RESET_CACHE=false `
+  -e USESSE=false `
+  -e INDEX_METADATA=true `
+  -e INDEX_CODE=true `
+  -e INDEX_HELP=false `
+  -e OPENAI_API_BASE=<...> `
+  -e OPENAI_MODEL=<...> `
+  -e OPENAI_API_KEY=<...> `
+  -e LICENSE_KEY=<...> `
+  -p <HOST_PORT>:8000 `
+  -v C:\mcp-updater-data\upp\staging\current\metadata:/app/metadata `
+  -v C:\mcp-updater-data\upp\staging\current\code:/app/code `
+  -v C:\mcp-updater-data\upp\chroma\current:/app/chroma_db `
+  comol/1c_code_metadata_mcp:<new-tag>
+```
+
+6. Проверить, что новый container поднялся с правильными флагами:
+
+```powershell
+docker logs --tail 200 mcp-upp
+docker inspect mcp-upp --format "{{range .Config.Env}}{{println .}}{{end}}" | Select-String "INDEX_HELP|INDEX_CODE|INDEX_METADATA|RESET_DATABASE"
+```
+
+7. Если новая версия не подошла, откатить container:
+
+```powershell
+docker rm -f mcp-upp
+docker rename mcp-upp-old mcp-upp
+docker start mcp-upp
+```
+
+Рекомендация: даже при ручном upgrade сначала зафиксировать старый image tag из `docker inspect`, чтобы rollback был не только по имени container, но и по версии image.
+
 ## Optimization Model
 
 Updater пропускает работу, если:

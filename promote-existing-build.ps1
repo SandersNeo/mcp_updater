@@ -9,7 +9,7 @@ param(
     [string]$PromoteReportHash,
 
     [switch]$NoGitPull,
-    [switch]$Verbose,
+    [switch]$UpdaterVerbose,
     [switch]$DryRun
 )
 
@@ -107,7 +107,7 @@ if ($NoGitPull) {
     $arguments += "--no-git-pull"
 }
 
-if ($Verbose) {
+if ($UpdaterVerbose) {
     $arguments += "--verbose"
 }
 

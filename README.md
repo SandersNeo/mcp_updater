@@ -95,6 +95,22 @@ Updater не принимает отдельные `repo.path`, `stagingRoot`, `
 
 Стандартные контейнерные пути `METADATA_PATH=/app/metadata` и `CODE_PATH=/app/code` добавляются updater-ом автоматически.
 
+Проектные флаги индексации задаются в `project.json` внутри блока `mcp`:
+
+- `indexMetadata` - индексировать metadata;
+- `indexCode` - индексировать code;
+- `indexHelp` - индексировать help/XSD.
+
+Если help меняется редко и его поиск не нужен в конкретном проекте, help-индексацию можно отключить только для этого проекта:
+
+```json
+{
+  "mcp": {
+    "indexHelp": false
+  }
+}
+```
+
 ## Secrets
 
 Секреты не берутся из переменных окружения процесса. Они читаются из JSON-файлов.
@@ -327,6 +343,33 @@ python .\update_mcp_project.py `
   --promote-source-fingerprint <source_fingerprint_from_log> `
   --promote-report-hash <report_hash_from_log> `
   --verbose
+```
+
+Для этого же сценария есть helper-скрипт `promote-existing-build.ps1`. Он может сам взять `Target commit`, `Source fingerprint` и `Report hash` из последнего `*-update.log` проекта или из явно указанного update-лога:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\promote-existing-build.ps1 `
+  -Config C:\mcp-updater-data\upp\project.json `
+  -UpdateLog C:\mcp-updater-data\upp\logs\20260520-234903-update.log `
+  -UpdaterVerbose
+```
+
+Готовая команда для `UPP build -> production`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\promote-existing-build.ps1 `
+  -Config C:\mcp-updater-data\upp\project.json `
+  -UpdateLog C:\mcp-updater-data\upp\logs\20260520-234903-update.log `
+  -UpdaterVerbose
+```
+
+Готовая команда для `UAT build -> production`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\promote-existing-build.ps1 `
+  -Config C:\mcp-updater-data\uat\project.json `
+  -UpdateLog C:\mcp-updater-data\uat\logs\20260520-234908-update.log `
+  -UpdaterVerbose
 ```
 
 Перед promote стоит проверить build container:

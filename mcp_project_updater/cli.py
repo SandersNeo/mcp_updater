@@ -176,16 +176,21 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
             source_result.extension_exists,
         )
 
-        if target_commit == state_snapshot.last_indexed_commit and not options.force:
-            logger.info("No changes detected. Update is skipped.")
-            return ExitCode.SUCCESS
-
         stage = "source_fingerprint"
         source_fingerprint = compute_source_fingerprint(source_result)
         logger.info("Source fingerprint: %s", source_fingerprint)
         current_report_exists = (config.paths.staging_root / "current" / "metadata" / "Report.txt").exists()
         current_chroma_path = config.paths.chroma_root / "current"
         current_chroma_exists = current_chroma_path.exists()
+        if (
+            target_commit == state_snapshot.last_indexed_commit
+            and source_fingerprint == state_snapshot.last_source_fingerprint
+            and not options.force
+            and current_report_exists
+            and current_chroma_exists
+        ):
+            logger.info("No changes detected. Update is skipped.")
+            return ExitCode.SUCCESS
         if (
             source_fingerprint == state_snapshot.last_source_fingerprint
             and not options.force

@@ -179,9 +179,18 @@ def test_main_returns_success_for_mocked_full_workflow(tmp_path: Path, monkeypat
 
 def test_main_returns_success_when_no_changes_and_not_forced(tmp_path: Path, monkeypatch) -> None:
     config_path = _write_config(tmp_path)
+    source_result = detect_sources(tmp_path / "repo", "src/cf", False, "src/cfe", False)
+    source_fingerprint = compute_source_fingerprint(source_result)
     state_root = tmp_path / "state"
     state_root.mkdir(parents=True, exist_ok=True)
     (state_root / "last_indexed_commit").write_text("same-commit\n", encoding="utf-8")
+    (state_root / "last_source_fingerprint").write_text(f"{source_fingerprint}\n", encoding="utf-8")
+    current_report_path = tmp_path / "staging" / "current" / "metadata" / "Report.txt"
+    current_report_path.parent.mkdir(parents=True, exist_ok=True)
+    current_report_path.write_text("ok", encoding="utf-8")
+    current_chroma = tmp_path / "chroma" / "current"
+    current_chroma.mkdir(parents=True, exist_ok=True)
+    (current_chroma / "db.bin").write_text("ok", encoding="utf-8")
 
     _mock_phase2_dependencies(monkeypatch, commit="same-commit")
 
@@ -377,6 +386,65 @@ def test_main_uses_native_report_without_running_parser(tmp_path: Path, monkeypa
 
     _mock_phase2_dependencies(
         monkeypatch,
+        complete_phase4=True,
+        complete_phase5=True,
+        complete_phase6=True,
+    )
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.run_parser",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("run_parser must not be called")),
+    )
+
+    result = main(["--config", str(config_path)])
+
+    assert result == ExitCode.SUCCESS
+    assert (tmp_path / "staging" / "build" / "metadata" / "Report.txt").read_text(encoding="utf-8") == (
+        native_report_path.read_text(encoding="utf-8")
+    )
+
+
+def test_main_does_not_skip_when_native_report_changes_but_commit_is_same(tmp_path: Path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    payload["sources"]["nativeReportPath"] = "native/Report.txt"
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    native_report_path = tmp_path / "repo" / "native" / "Report.txt"
+    native_report_path.parent.mkdir(parents=True, exist_ok=True)
+    native_report_path.write_text(
+        '\t- Конфигурации.Orders\nИмя: "Orders"\nСиноним: "Orders"\n',
+        encoding="utf-8",
+    )
+
+    previous_report_path = tmp_path / "repo" / "native" / "previous-Report.txt"
+    previous_report_path.write_text(
+        '\t- Конфигурации.Orders\nИмя: "OldOrders"\nСиноним: "OldOrders"\n',
+        encoding="utf-8",
+    )
+    previous_source_result = detect_sources(
+        tmp_path / "repo",
+        "src/cf",
+        False,
+        "src/cfe",
+        False,
+        "native/previous-Report.txt",
+    )
+    previous_source_fingerprint = compute_source_fingerprint(previous_source_result)
+
+    state_root = tmp_path / "state"
+    state_root.mkdir(parents=True, exist_ok=True)
+    (state_root / "last_indexed_commit").write_text("same-commit\n", encoding="utf-8")
+    (state_root / "last_source_fingerprint").write_text(f"{previous_source_fingerprint}\n", encoding="utf-8")
+    current_report_path = tmp_path / "staging" / "current" / "metadata" / "Report.txt"
+    current_report_path.parent.mkdir(parents=True, exist_ok=True)
+    current_report_path.write_text("ok", encoding="utf-8")
+    current_chroma = tmp_path / "chroma" / "current"
+    current_chroma.mkdir(parents=True, exist_ok=True)
+    (current_chroma / "db.bin").write_text("ok", encoding="utf-8")
+
+    _mock_phase2_dependencies(
+        monkeypatch,
+        commit="same-commit",
         complete_phase4=True,
         complete_phase5=True,
         complete_phase6=True,

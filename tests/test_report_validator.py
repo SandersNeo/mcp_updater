@@ -27,6 +27,15 @@ def test_validate_report_with_root_leading_tab(tmp_path: Path) -> None:
     assert result.report_size > 0
 
 
+def test_validate_report_accepts_utf16_with_bom(tmp_path: Path) -> None:
+    report_path = tmp_path / "Report.txt"
+    report_path.write_text('\t- Конфигурации.Orders\nИмя: "Orders"\nСиноним: "Orders"\n', encoding="utf-16")
+
+    result = validate_report(report_path, _config(), tmp_path / "diagnostics")
+
+    assert result.report_size == len(report_path.read_bytes())
+
+
 def test_validate_report_forbidden_pattern(tmp_path: Path) -> None:
     report_path = tmp_path / "Report.txt"
     report_path.write_text('\t- Конфигурации.Orders\nИмя: "Orders"\nСиноним: "Orders"\nsrc/cf\n', encoding="utf-8")

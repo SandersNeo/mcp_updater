@@ -30,8 +30,9 @@ def validate_report(
     if not report_path.exists():
         raise ReportValidationError(f"Report file does not exist: {report_path}", ExitCode.REPORT_VALIDATION_FAILED)
 
-    report_text = report_path.read_text(encoding="utf-8")
-    report_size = len(report_text.encode("utf-8"))
+    report_bytes = report_path.read_bytes()
+    report_text = _decode_report_text(report_bytes, report_path)
+    report_size = len(report_bytes)
     if report_size <= 0 or not report_text.strip():
         raise ReportValidationError("Report.txt is empty.", ExitCode.REPORT_VALIDATION_FAILED)
 
@@ -63,6 +64,19 @@ def validate_report(
         report_path=report_path,
         report_size=report_size,
         diagnostics_error_count=diagnostics_error_count,
+    )
+
+
+def _decode_report_text(report_bytes: bytes, report_path: Path) -> str:
+    for encoding in ("utf-8", "utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "cp1251"):
+        try:
+            return report_bytes.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+
+    raise ReportValidationError(
+        f"Report.txt has unsupported encoding: {report_path}",
+        ExitCode.REPORT_VALIDATION_FAILED,
     )
 
 

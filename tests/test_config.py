@@ -83,6 +83,7 @@ def _base_payload() -> dict:
             "mainConfigRequired": False,
             "extensionPath": "src/cfe",
             "extensionRequired": False,
+            "nativeReportPath": None,
         },
         "parser": {
             "toolPath": "",
@@ -307,6 +308,30 @@ def test_main_only_project_is_allowed(tmp_path: Path) -> None:
 
     assert config.sources.main_config_path == "src/cf"
     assert config.sources.extension_path is None
+
+
+def test_native_report_path_is_loaded(tmp_path: Path) -> None:
+    payload = _base_payload()
+    payload["sources"]["nativeReportPath"] = "native/Report.txt"
+    config_path = _write_config(tmp_path, payload)
+
+    config = load_project_config(config_path)
+
+    assert config.sources.native_report_path == "native/Report.txt"
+
+
+def test_native_report_allows_missing_parser_tool(tmp_path: Path) -> None:
+    payload = _base_payload()
+    payload["sources"]["nativeReportPath"] = "native/Report.txt"
+    config_path = _write_config(tmp_path, payload)
+    settings_path = tmp_path / "settings.global.json"
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    settings["parser"]["toolPath"] = str(tmp_path / "missing_parser.py")
+    settings_path.write_text(json.dumps(settings), encoding="utf-8")
+
+    config = load_project_config(config_path)
+
+    assert config.parser.tool_path.name == "missing_parser.py"
 
 
 def test_required_main_source_path_must_be_configured(tmp_path: Path) -> None:

@@ -19,6 +19,8 @@ def compute_source_fingerprint(source_result: SourceDetectionResult) -> str:
         _update_digest_for_directory(digest, source_result.main_path, prefix="main")
     if source_result.extension_path is not None:
         _update_digest_for_directory(digest, source_result.extension_path, prefix="extension")
+    if source_result.native_report_path is not None:
+        _update_digest_for_file(digest, source_result.native_report_path, prefix="native-report")
 
     return digest.hexdigest()
 
@@ -29,3 +31,8 @@ def _update_digest_for_directory(digest: "hashlib._Hash", root: Path, *, prefix:
         relative_path = file_path.relative_to(root).as_posix()
         digest.update(f"{prefix}:{relative_path}\n".encode("utf-8"))
         digest.update(file_path.read_bytes())
+
+
+def _update_digest_for_file(digest: "hashlib._Hash", file_path: Path, *, prefix: str) -> None:
+    digest.update(f"{prefix}:{file_path.name}\n".encode("utf-8"))
+    digest.update(file_path.read_bytes())

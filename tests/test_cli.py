@@ -363,6 +363,37 @@ def test_main_returns_warning_when_success_notification_fails(tmp_path: Path, mo
     assert result == ExitCode.SUCCESS_WITH_WARNINGS
 
 
+def test_main_uses_native_report_without_running_parser(tmp_path: Path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    payload["sources"]["nativeReportPath"] = "native/Report.txt"
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+    native_report_path = tmp_path / "repo" / "native" / "Report.txt"
+    native_report_path.parent.mkdir(parents=True, exist_ok=True)
+    native_report_path.write_text(
+        '\t- Конфигурации.Orders\nИмя: "Orders"\nСиноним: "Orders"\n',
+        encoding="utf-8",
+    )
+
+    _mock_phase2_dependencies(
+        monkeypatch,
+        complete_phase4=True,
+        complete_phase5=True,
+        complete_phase6=True,
+    )
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.run_parser",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("run_parser must not be called")),
+    )
+
+    result = main(["--config", str(config_path)])
+
+    assert result == ExitCode.SUCCESS
+    assert (tmp_path / "staging" / "build" / "metadata" / "Report.txt").read_text(encoding="utf-8") == (
+        native_report_path.read_text(encoding="utf-8")
+    )
+
+
 def test_main_preserves_update_error_when_failure_notification_fails(tmp_path: Path, monkeypatch) -> None:
     config_path = _write_config(tmp_path)
     _mock_phase2_dependencies(monkeypatch)

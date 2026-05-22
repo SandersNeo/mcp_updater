@@ -15,7 +15,8 @@
     "mainConfigPath": "src/cf",
     "mainConfigRequired": true,
     "extensionPath": "src/cfe",
-    "extensionRequired": false
+    "extensionRequired": false,
+    "nativeReportPath": null
   },
   "mcp": {
     "image": "comol/1c_code_metadata_mcp:light",

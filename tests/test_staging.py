@@ -6,6 +6,7 @@ from pathlib import Path
 from mcp_project_updater.config import load_project_config
 from mcp_project_updater.source_detector import detect_sources
 from mcp_project_updater.staging import (
+    copy_native_report,
     generate_parser_config,
     prepare_build_code_directory,
     prepare_build_staging,
@@ -118,6 +119,18 @@ def test_prepare_build_staging_creates_expected_structure(tmp_path: Path) -> Non
     assert build_paths.logs.exists()
     assert build_paths.settings.exists()
     assert build_paths.generator_settings_path.name == "orders.xml-overrides.json"
+
+
+def test_copy_native_report_copies_report_to_metadata_directory(tmp_path: Path) -> None:
+    build_paths = prepare_build_staging(tmp_path / "staging", "orders")
+    native_report_path = tmp_path / "repo" / "native" / "Report.txt"
+    native_report_path.parent.mkdir(parents=True)
+    native_report_path.write_text("native report", encoding="utf-8")
+
+    copied_path = copy_native_report(build_paths, native_report_path)
+
+    assert copied_path == build_paths.report_path
+    assert build_paths.report_path.read_text(encoding="utf-8") == "native report"
 
 
 def test_generate_and_write_parser_config(tmp_path: Path) -> None:

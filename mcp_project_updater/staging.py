@@ -81,6 +81,11 @@ def write_parser_config(build_paths: BuildPaths, parser_config: dict[str, object
     return build_paths.parser_config_path
 
 
+def copy_native_report(build_paths: BuildPaths, source_report_path: Path) -> Path:
+    shutil.copyfile(source_report_path, build_paths.report_path)
+    return build_paths.report_path
+
+
 def prepare_build_code_directory(build_paths: BuildPaths, source_result: SourceDetectionResult) -> None:
     if source_result.main_exists and source_result.main_path is not None:
         shutil.copytree(source_result.main_path, build_paths.code / "cf", dirs_exist_ok=True)

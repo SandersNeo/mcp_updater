@@ -17,6 +17,7 @@ class SourceDetectionResult:
     extension_exists: bool
     main_path: Path | None
     extension_path: Path | None
+    native_report_path: Path | None
 
 
 def detect_sources(
@@ -25,12 +26,15 @@ def detect_sources(
     main_config_required: bool,
     extension_path: str | None,
     extension_required: bool,
+    native_report_path: str | None = None,
 ) -> SourceDetectionResult:
     resolved_main_path = repo_path / main_config_path if main_config_path else None
     resolved_extension_path = repo_path / extension_path if extension_path else None
+    resolved_native_report_path = repo_path / native_report_path if native_report_path else None
 
     main_exists = resolved_main_path.exists() if resolved_main_path is not None else False
     extension_exists = resolved_extension_path.exists() if resolved_extension_path is not None else False
+    native_report_exists = resolved_native_report_path.exists() if resolved_native_report_path is not None else False
 
     if main_config_required and not main_exists:
         raise SourceDetectionError(
@@ -50,9 +54,16 @@ def detect_sources(
             ExitCode.MISSING_SOURCES,
         )
 
+    if resolved_native_report_path is not None and not native_report_exists:
+        raise SourceDetectionError(
+            f"Configured native report file is missing: {resolved_native_report_path}",
+            ExitCode.MISSING_SOURCES,
+        )
+
     return SourceDetectionResult(
         main_exists=main_exists,
         extension_exists=extension_exists,
         main_path=resolved_main_path if main_exists else None,
         extension_path=resolved_extension_path if extension_exists else None,
+        native_report_path=resolved_native_report_path if native_report_exists else None,
     )

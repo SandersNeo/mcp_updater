@@ -20,7 +20,14 @@ from .rollback import perform_manual_rollback
 from .smoke_infrastructure import InfrastructureSmokeContext, run_infrastructure_smoke_test
 from .smoke_tool import run_tool_smoke_test
 from .source_detector import SourceDetectionResult, detect_sources
-from .staging import BuildPaths, generate_parser_config, prepare_build_code_directory, prepare_build_staging, write_parser_config
+from .staging import (
+    BuildPaths,
+    copy_native_report,
+    generate_parser_config,
+    prepare_build_code_directory,
+    prepare_build_staging,
+    write_parser_config,
+)
 from .state import StateSnapshot, StateStore
 from .switcher import perform_switch, run_production_smoke_test
 from .errors import UpdaterError
@@ -158,6 +165,7 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
             config.sources.main_config_required,
             config.sources.extension_path,
             config.sources.extension_required,
+            config.sources.native_report_path,
         )
 
         logger.info("Target commit: %s", target_commit)
@@ -193,16 +201,21 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
 
         stage = "staging"
         build_paths = prepare_build_staging(config.paths.staging_root, config.project)
-        parser_config_payload = generate_parser_config(config, build_paths, source_result)
-        parser_config_path = write_parser_config(build_paths, parser_config_payload)
-        stage = "parser"
-        parser_result = run_parser(
-            config.parser,
-            parser_config_path,
-            verbose=options.verbose,
-            working_directory=config.repo.path,
-        )
-        logger.info("Parser exit code: %s", parser_result.returncode)
+        if source_result.native_report_path is not None:
+            stage = "report_copy"
+            copied_report_path = copy_native_report(build_paths, source_result.native_report_path)
+            logger.info("Using native report: %s -> %s", source_result.native_report_path, copied_report_path)
+        else:
+            parser_config_payload = generate_parser_config(config, build_paths, source_result)
+            parser_config_path = write_parser_config(build_paths, parser_config_payload)
+            stage = "parser"
+            parser_result = run_parser(
+                config.parser,
+                parser_config_path,
+                verbose=options.verbose,
+                working_directory=config.repo.path,
+            )
+            logger.info("Parser exit code: %s", parser_result.returncode)
 
         stage = "report_validation"
         report_result = validate_report(

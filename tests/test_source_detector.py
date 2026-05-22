@@ -37,6 +37,19 @@ def test_detect_sources_both(tmp_path) -> None:
     assert result.extension_exists is True
 
 
+def test_detect_sources_with_native_report(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    (repo / "src" / "cf").mkdir(parents=True)
+    native_report_path = repo / "native" / "Report.txt"
+    native_report_path.parent.mkdir(parents=True)
+    native_report_path.write_text("report", encoding="utf-8")
+
+    result = detect_sources(repo, "src/cf", False, "src/cfe", False, "native/Report.txt")
+
+    assert result.main_exists is True
+    assert result.native_report_path == native_report_path
+
+
 def test_detect_sources_none_raises(tmp_path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -65,3 +78,13 @@ def test_required_extension_missing_raises(tmp_path) -> None:
         detect_sources(repo, "src/cf", False, "src/cfe", True)
 
     assert exc.value.exit_code == ExitCode.EXTENSION_REQUIRED_MISSING
+
+
+def test_missing_native_report_raises(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    (repo / "src" / "cf").mkdir(parents=True)
+
+    with pytest.raises(SourceDetectionError) as exc:
+        detect_sources(repo, "src/cf", False, "src/cfe", False, "native/Report.txt")
+
+    assert exc.value.exit_code == ExitCode.MISSING_SOURCES

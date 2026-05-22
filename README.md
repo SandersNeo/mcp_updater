@@ -8,6 +8,7 @@
 - Git
 - Docker
 - внешний parser tool, путь к нему задается глобально в `settings.global.json`
+  и требуется только если `sources.nativeReportPath` не задан
 - MCP image строго один из двух вариантов: `comol/1c_code_metadata_mcp:light` или `comol/1c_code_metadata_mcp:latest`
 
 ## Установка
@@ -30,6 +31,10 @@ pip install -e .
 - extension-only: `mainConfigPath=null`, `mainConfigRequired=false`;
 - main-only: `extensionPath=null`, `extensionRequired=false`.
 
+Если готовый `Report.txt` уже формируется внешним штатным процессом, можно передать его updater-у через
+`sources.nativeReportPath`. В этом режиме updater копирует указанный файл в `staging/build/metadata/Report.txt`
+и не запускает внешний parser tool. Путь задается относительно `<paths.root>/repo`.
+
 Короткий пример `extension-only`:
 
 ```json
@@ -39,7 +44,8 @@ pip install -e .
     "mainConfigPath": null,
     "mainConfigRequired": false,
     "extensionPath": "src/cfe",
-    "extensionRequired": true
+    "extensionRequired": true,
+    "nativeReportPath": "reports/Report.txt"
   },
   "paths": {
     "root": "C:/mcp-updater-data/esb"

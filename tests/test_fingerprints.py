@@ -28,3 +28,21 @@ def test_compute_source_fingerprint_changes_with_source_content(tmp_path) -> Non
     second = compute_source_fingerprint(source_result)
 
     assert first != second
+
+
+def test_compute_source_fingerprint_changes_with_native_report_content(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    main_path = repo / "src" / "cf"
+    main_path.mkdir(parents=True)
+    (main_path / "module.bsl").write_text("Procedure A() EndProcedure", encoding="utf-8")
+    native_report_path = repo / "native" / "Report.txt"
+    native_report_path.parent.mkdir(parents=True)
+    native_report_path.write_text("one", encoding="utf-8")
+
+    source_result = detect_sources(repo, "src/cf", False, "src/cfe", False, "native/Report.txt")
+    first = compute_source_fingerprint(source_result)
+
+    native_report_path.write_text("two", encoding="utf-8")
+    second = compute_source_fingerprint(source_result)
+
+    assert first != second

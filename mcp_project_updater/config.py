@@ -100,6 +100,7 @@ class SourcesConfig:
     main_config_required: bool
     extension_path: str | None
     extension_required: bool
+    native_report_path: str | None
 
 
 @dataclass(slots=True)
@@ -316,6 +317,7 @@ def _parse_project_config(raw: dict[str, Any], config_path: Path) -> ProjectConf
             main_config_required=main_config_required,
             extension_path=_expect_optional_string(sources_raw.get("extensionPath"), "sources.extensionPath"),
             extension_required=extension_required,
+            native_report_path=_expect_optional_string(sources_raw.get("nativeReportPath"), "sources.nativeReportPath"),
         ),
         parser=ParserConfig(
             tool_path=_expect_path_string(parser_raw.get("toolPath"), "settings.parser.toolPath"),
@@ -436,7 +438,7 @@ def _parse_project_config(raw: dict[str, Any], config_path: Path) -> ProjectConf
 
 
 def _validate_project_config(config: ProjectConfig) -> None:
-    if not config.parser.tool_path.exists():
+    if not config.sources.native_report_path and not config.parser.tool_path.exists():
         raise ConfigValidationError(f"Parser tool path does not exist: {config.parser.tool_path}")
 
     if not config.repo.path.exists() and not config.repo.clone_url:

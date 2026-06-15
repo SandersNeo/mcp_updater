@@ -52,7 +52,7 @@ def _settings_payload(parser_path: Path, tool_path: Path) -> dict:
                 "enabled": True,
                 "timeoutSeconds": 60,
                 "checkIntervalSeconds": 5,
-                "acceptableHttpStatusCodes": [200, 400, 404, 405],
+                "acceptableHttpStatusCodes": [200, 400, 404, 405, 406],
                 "requireIndexStorageNotEmpty": True,
                 "logTailLines": 100,
                 "logErrorPatterns": ["Traceback", "Unhandled exception", "CRITICAL"],

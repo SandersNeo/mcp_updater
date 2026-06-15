@@ -114,10 +114,10 @@ Host-side storage root переехал в WSL, а container mount target зад
 
 Legacy `requireChromaNotEmpty` читается только как compatibility alias. Если не задано ни новое, ни legacy имя, config validation падает по `settings.smokeTest.infrastructure.requireIndexStorageNotEmpty`.
 
-Для MCP endpoint обычно допустимы `200`, `400`, `404`, `405`:
+Для MCP endpoint обычно допустимы `200`, `400`, `404`, `405`, `406`:
 
 ```json
-"acceptableHttpStatusCodes": [200, 400, 404, 405]
+"acceptableHttpStatusCodes": [200, 400, 404, 405, 406]
 ```
 
 При `logReadyPatterns: []` readiness определяется по container state, reachable host port, acceptable HTTP status, non-empty MCP index storage path и отсутствию error patterns в логах.

@@ -35,7 +35,7 @@ Checklist для первого реального запуска на parser, D
 - Убедиться, что build URL задан только в `mcp.build.url`.
 - Убедиться, что production URL задан только в `mcp.production.url`.
 - Убедиться, что `mcp.indexContainerPath`, если задан, является absolute Unix-style container path.
-- Проверить `settings.smokeTest.infrastructure.acceptableHttpStatusCodes`; для MCP endpoint обычно нужен `405`.
+- Проверить `settings.smokeTest.infrastructure.acceptableHttpStatusCodes`; для MCP endpoint обычно нужны `405` и `406`.
 - Для шумных build containers предпочтительно задать `logTailLines >= 2000`, а `logReadyPatterns` оставить пустым списком.
 
 ## 3. Dry Run

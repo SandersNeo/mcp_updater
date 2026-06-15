@@ -128,7 +128,7 @@ def _base_payload() -> dict:
                 "enabled": True,
                 "timeoutSeconds": 60,
                 "checkIntervalSeconds": 5,
-                "acceptableHttpStatusCodes": [200, 400, 404, 405],
+                "acceptableHttpStatusCodes": [200, 400, 404, 405, 406],
                 "requireIndexStorageNotEmpty": True,
                 "logTailLines": 200,
                 "logErrorPatterns": ["Traceback"],
@@ -467,7 +467,7 @@ def test_http_ready_url_is_not_required_anymore(tmp_path: Path) -> None:
 
     config = load_project_config(config_path)
 
-    assert config.smoke_test.infrastructure.acceptable_http_status_codes == [200, 400, 404, 405]
+    assert config.smoke_test.infrastructure.acceptable_http_status_codes == [200, 400, 404, 405, 406]
 
 
 def test_extension_only_project_is_allowed(tmp_path: Path) -> None:

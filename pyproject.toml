@@ -13,3 +13,15 @@ dependencies = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = [
+  "mcp_project_updater*",
+  "mcp_smoke_test*",
+  "mcp_telegram_relay*",
+]
+exclude = [
+  "openspec*",
+  "skills*",
+  "tests*",
+]

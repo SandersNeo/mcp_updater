@@ -255,6 +255,13 @@ Automatic rollback не применяется в storage migration.
 
 Promote выполняет build smoke-tests, затем вызывает общий `perform_switch`.
 
+`promote-existing-build.ps1`:
+
+- принимает `-UpdateLog` как optional override;
+- если `-UpdateLog` не указан, читает `paths.root` из project config;
+- выбирает самый поздний по timestamp в имени `YYYYMMDD-HHMMSS-update.log` из `<paths.root>/logs`;
+- извлекает из log `Target commit:`, `Source fingerprint:` и `Report hash:`.
+
 ## 13. Tests
 
 Обязательные тестовые области:

@@ -209,6 +209,16 @@ Helper:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\promote-existing-build.ps1 `
   -Config C:\mcp-updater-data\orders\project.json `
+  -UpdaterVerbose
+```
+
+Если `-UpdateLog` не указан, helper читает `paths.root` из project config и берет самый поздний по timestamp в имени `YYYYMMDD-HHMMSS-update.log` из `<paths.root>\logs`.
+
+Явный log можно указать как override:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\promote-existing-build.ps1 `
+  -Config C:\mcp-updater-data\orders\project.json `
   -UpdateLog C:\mcp-updater-data\orders\logs\20260520-234903-update.log `
   -UpdaterVerbose
 ```

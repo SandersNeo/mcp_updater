@@ -65,14 +65,27 @@ function Resolve-UpdateLogPath {
     }
 
     $latestLog = Get-ChildItem -LiteralPath $logsRoot -File -Filter "*-update.log" |
-        Sort-Object LastWriteTimeUtc -Descending |
+        ForEach-Object {
+            $match = [regex]::Match($_.Name, '^(?<date>\d{8})-(?<time>\d{6})-update\.log$')
+            if ($match.Success) {
+                [PSCustomObject]@{
+                    Path = $_.FullName
+                    Timestamp = [datetime]::ParseExact(
+                        "$($match.Groups['date'].Value)$($match.Groups['time'].Value)",
+                        "yyyyMMddHHmmss",
+                        [Globalization.CultureInfo]::InvariantCulture
+                    )
+                }
+            }
+        } |
+        Sort-Object Timestamp -Descending |
         Select-Object -First 1
 
     if (-not $latestLog) {
-        throw "No *-update.log files found in: $logsRoot"
+        throw "No timestamped *-update.log files found in: $logsRoot"
     }
 
-    return $latestLog.FullName
+    return $latestLog.Path
 }
 
 $resolvedConfig = (Resolve-Path -LiteralPath $Config).Path

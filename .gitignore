@@ -2,3 +2,6 @@ __pycache__/
 .pytest_cache/
 *.pyc
 
+# Local OpenSpec workflow artifacts
+openspec/
+.codex/

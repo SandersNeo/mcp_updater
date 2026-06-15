@@ -14,6 +14,7 @@ from mcp_project_updater.docker_ops import (
     inspect_container,
     read_container_logs,
     remove_container,
+    stop_container,
 )
 
 
@@ -32,6 +33,10 @@ def test_ensure_docker_available_raises() -> None:
 
 def test_remove_container_ignores_missing_container() -> None:
     remove_container("missing", runner=lambda command, cwd: DockerCommandResult(1, "", "No such container: missing"))
+
+
+def test_stop_container_ignores_missing_container() -> None:
+    stop_container("missing", runner=lambda command, cwd: DockerCommandResult(1, "", "No such container: missing"))
 
 
 def test_inspect_container_returns_none_for_missing() -> None:

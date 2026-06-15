@@ -43,6 +43,7 @@ def _write_config(tmp_path: Path) -> Path:
         },
         "mcp": {
             "image": "comol/1c_code_metadata_mcp:light",
+            "indexStorageRoot": str(tmp_path / "index-storage"),
             "containerPort": 8000,
             "production": {
                 "containerName": "mcp-orders",
@@ -81,7 +82,7 @@ def _write_config(tmp_path: Path) -> Path:
                 "checkIntervalSeconds": 5,
                 "httpReadyUrl": "http://localhost:18100/mcp",
                 "acceptableHttpStatusCodes": [200],
-                "requireChromaNotEmpty": True,
+                "requireIndexStorageNotEmpty": True,
                 "logTailLines": 100,
                 "logErrorPatterns": ["Traceback"],
                 "logReadyPatterns": ["Started"],
@@ -128,8 +129,43 @@ def test_parse_args() -> None:
 
     assert options.config_path.name == "project.json"
     assert options.force is True
+    assert options.storage_migration is False
     assert options.dry_run is True
     assert options.promote_existing_build is False
+
+
+def test_parse_args_storage_migration() -> None:
+    options = parse_args(["--config", "project.json", "--storage-migration"])
+
+    assert options.storage_migration is True
+    assert options.force is False
+
+
+def test_parse_args_storage_migration_rejects_force() -> None:
+    try:
+        parse_args(["--config", "project.json", "--storage-migration", "--force"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("Expected argparse SystemExit")
+
+
+def test_parse_args_storage_migration_rejects_rollback() -> None:
+    try:
+        parse_args(["--config", "project.json", "--storage-migration", "--rollback"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("Expected argparse SystemExit")
+
+
+def test_parse_args_storage_migration_rejects_promote_existing_build() -> None:
+    try:
+        parse_args(["--config", "project.json", "--storage-migration", "--promote-existing-build"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("Expected argparse SystemExit")
 
 
 def test_parse_args_promote_existing_build() -> None:
@@ -188,9 +224,9 @@ def test_main_returns_success_when_no_changes_and_not_forced(tmp_path: Path, mon
     current_report_path = tmp_path / "staging" / "current" / "metadata" / "Report.txt"
     current_report_path.parent.mkdir(parents=True, exist_ok=True)
     current_report_path.write_text("ok", encoding="utf-8")
-    current_chroma = tmp_path / "chroma" / "current"
-    current_chroma.mkdir(parents=True, exist_ok=True)
-    (current_chroma / "db.bin").write_text("ok", encoding="utf-8")
+    current_index_storage = tmp_path / "index-storage" / "current"
+    current_index_storage.mkdir(parents=True, exist_ok=True)
+    (current_index_storage / "db.bin").write_text("ok", encoding="utf-8")
 
     _mock_phase2_dependencies(monkeypatch, commit="same-commit")
 
@@ -230,9 +266,9 @@ def test_main_reuses_current_chroma_for_build_when_metadata_changed(tmp_path: Pa
         '\t- РљРѕРЅС„РёРіСѓСЂР°С†РёРё.Orders\nРРјСЏ: "Orders"\nРЎРёРЅРѕРЅРёРј: "Orders"\n',
         encoding="utf-8",
     )
-    current_chroma = tmp_path / "chroma" / "current"
-    current_chroma.mkdir(parents=True, exist_ok=True)
-    (current_chroma / "db.bin").write_text("seed", encoding="utf-8")
+    current_index_storage = tmp_path / "index-storage" / "current"
+    current_index_storage.mkdir(parents=True, exist_ok=True)
+    (current_index_storage / "db.bin").write_text("seed", encoding="utf-8")
     (tmp_path / "state").mkdir(parents=True, exist_ok=True)
     (tmp_path / "state" / "last_report_hash").write_text("different-report-hash\n", encoding="utf-8")
 
@@ -259,7 +295,7 @@ def test_main_reuses_current_chroma_for_build_when_metadata_changed(tmp_path: Pa
     )
     monkeypatch.setattr(
         "mcp_project_updater.cli.perform_switch",
-        lambda config, state_store, target_commit, production_log_path, docker_runner: type(
+        lambda config, state_store, target_commit, production_log_path, docker_runner, storage_migration=False: type(
             "SwitchResult",
             (),
             {"target_commit": target_commit, "production_log_path": production_log_path},
@@ -270,8 +306,93 @@ def test_main_reuses_current_chroma_for_build_when_metadata_changed(tmp_path: Pa
 
     assert result == ExitCode.SUCCESS
     assert captured["reset_database"] is False
-    assert captured["seed_chroma_from"] == current_chroma
+    assert captured["seed_index_storage_from"] == current_index_storage
     assert captured["index_metadata"] is None
+
+
+def test_main_storage_migration_does_not_seed_from_current_storage(tmp_path: Path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    current_report = tmp_path / "staging" / "current" / "metadata" / "Report.txt"
+    current_report.parent.mkdir(parents=True, exist_ok=True)
+    current_report.write_text("ok", encoding="utf-8")
+    current_index_storage = tmp_path / "index-storage" / "current"
+    current_index_storage.mkdir(parents=True, exist_ok=True)
+    (current_index_storage / "db.bin").write_text("seed", encoding="utf-8")
+
+    captured = {"switch_storage_migration": None}
+    _mock_phase2_dependencies(monkeypatch, create_report=True)
+    monkeypatch.setattr("mcp_project_updater.cli.ensure_docker_available", lambda: "26.1.0")
+
+    def _fake_start_build_container(mcp_config, build_paths, paths_config, runner, **kwargs):
+        captured.update(kwargs)
+        return type("BuildContainerResult", (), {"command": ["docker", "run"], "container_id": "cid"})()
+
+    def _fake_switch(config, state_store, target_commit, production_log_path, docker_runner, storage_migration=False):
+        captured["switch_storage_migration"] = storage_migration
+        return type("SwitchResult", (), {"target_commit": target_commit, "production_log_path": production_log_path})()
+
+    monkeypatch.setattr("mcp_project_updater.cli.start_build_container", _fake_start_build_container)
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.run_infrastructure_smoke_test",
+        lambda smoke_config, context, runner: type("SmokeResult", (), {"http_status_code": 404})(),
+    )
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.run_tool_smoke_test",
+        lambda config, tool_smoke_config, working_directory, url: type("ToolSmokeResult", (), {"stdout": '{"ok":true}'})(),
+    )
+    monkeypatch.setattr("mcp_project_updater.cli.write_container_logs", lambda container_name, output_path, runner: output_path)
+    monkeypatch.setattr("mcp_project_updater.cli.perform_switch", _fake_switch)
+
+    result = main(["--config", str(config_path), "--storage-migration"])
+
+    assert result == ExitCode.SUCCESS
+    assert captured["seed_index_storage_from"] is None
+    assert captured["reset_database"] is None
+    assert captured["index_metadata"] is None
+    assert captured["switch_storage_migration"] is True
+
+
+def test_main_force_rebuild_does_not_seed_from_current_storage(tmp_path: Path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    current_report = tmp_path / "staging" / "current" / "metadata" / "Report.txt"
+    current_report.parent.mkdir(parents=True, exist_ok=True)
+    current_report.write_text("ok", encoding="utf-8")
+    current_index_storage = tmp_path / "index-storage" / "current"
+    current_index_storage.mkdir(parents=True, exist_ok=True)
+    (current_index_storage / "db.bin").write_text("seed", encoding="utf-8")
+
+    captured = {}
+    _mock_phase2_dependencies(monkeypatch, create_report=True)
+    monkeypatch.setattr("mcp_project_updater.cli.ensure_docker_available", lambda: "26.1.0")
+
+    def _fake_start_build_container(mcp_config, build_paths, paths_config, runner, **kwargs):
+        captured.update(kwargs)
+        return type("BuildContainerResult", (), {"command": ["docker", "run"], "container_id": "cid"})()
+
+    monkeypatch.setattr("mcp_project_updater.cli.start_build_container", _fake_start_build_container)
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.run_infrastructure_smoke_test",
+        lambda smoke_config, context, runner: type("SmokeResult", (), {"http_status_code": 404})(),
+    )
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.run_tool_smoke_test",
+        lambda config, tool_smoke_config, working_directory, url: type("ToolSmokeResult", (), {"stdout": '{"ok":true}'})(),
+    )
+    monkeypatch.setattr("mcp_project_updater.cli.write_container_logs", lambda container_name, output_path, runner: output_path)
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.perform_switch",
+        lambda config, state_store, target_commit, production_log_path, docker_runner, storage_migration=False: type(
+            "SwitchResult",
+            (),
+            {"target_commit": target_commit, "production_log_path": production_log_path},
+        )(),
+    )
+
+    result = main(["--config", str(config_path), "--force"])
+
+    assert result == ExitCode.SUCCESS
+    assert captured["seed_index_storage_from"] is None
+    assert captured["reset_database"] is None
 
 
 def test_main_promotes_existing_build(tmp_path: Path, monkeypatch) -> None:
@@ -283,14 +404,16 @@ def test_main_promotes_existing_build(tmp_path: Path, monkeypatch) -> None:
         encoding="utf-8",
     )
     (tmp_path / "staging" / "build" / "diagnostics").mkdir(parents=True)
-    (tmp_path / "chroma" / "build").mkdir(parents=True)
+    (tmp_path / "index-storage" / "build").mkdir(parents=True)
 
     called = {"switch_commit": None, "ready_patterns": None}
     _mock_phase2_dependencies(monkeypatch, complete_phase4=True, complete_phase5=True)
     monkeypatch.setattr("mcp_project_updater.cli.ensure_docker_available", lambda: "26.1.0")
     monkeypatch.setattr(
         "mcp_project_updater.cli.perform_switch",
-        lambda config, state_store, target_commit, production_log_path, docker_runner: called.__setitem__("switch_commit", target_commit)
+        lambda config, state_store, target_commit, production_log_path, docker_runner, storage_migration=False: called.__setitem__(
+            "switch_commit", target_commit
+        )
         or type("SwitchResult", (), {"target_commit": target_commit, "production_log_path": production_log_path})(),
     )
     monkeypatch.setattr(
@@ -338,9 +461,9 @@ def test_main_returns_success_when_source_fingerprint_matches_and_not_forced(tmp
     current_report_path = tmp_path / "staging" / "current" / "metadata" / "Report.txt"
     current_report_path.parent.mkdir(parents=True, exist_ok=True)
     current_report_path.write_text("ok", encoding="utf-8")
-    current_chroma = tmp_path / "chroma" / "current"
-    current_chroma.mkdir(parents=True, exist_ok=True)
-    (current_chroma / "db.bin").write_text("ok", encoding="utf-8")
+    current_index_storage = tmp_path / "index-storage" / "current"
+    current_index_storage.mkdir(parents=True, exist_ok=True)
+    (current_index_storage / "db.bin").write_text("ok", encoding="utf-8")
 
     _mock_phase2_dependencies(monkeypatch, commit="new-commit")
 
@@ -438,9 +561,9 @@ def test_main_does_not_skip_when_native_report_changes_but_commit_is_same(tmp_pa
     current_report_path = tmp_path / "staging" / "current" / "metadata" / "Report.txt"
     current_report_path.parent.mkdir(parents=True, exist_ok=True)
     current_report_path.write_text("ok", encoding="utf-8")
-    current_chroma = tmp_path / "chroma" / "current"
-    current_chroma.mkdir(parents=True, exist_ok=True)
-    (current_chroma / "db.bin").write_text("ok", encoding="utf-8")
+    current_index_storage = tmp_path / "index-storage" / "current"
+    current_index_storage.mkdir(parents=True, exist_ok=True)
+    (current_index_storage / "db.bin").write_text("ok", encoding="utf-8")
 
     _mock_phase2_dependencies(
         monkeypatch,
@@ -548,7 +671,7 @@ def _mock_phase2_dependencies(
     if complete_phase6:
         monkeypatch.setattr(
             "mcp_project_updater.cli.perform_switch",
-            lambda config, state_store, target_commit, production_log_path, docker_runner: type(
+            lambda config, state_store, target_commit, production_log_path, docker_runner, storage_migration=False: type(
                 "SwitchResult",
                 (),
                 {"target_commit": target_commit, "production_log_path": production_log_path},

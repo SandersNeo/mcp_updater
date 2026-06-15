@@ -7,13 +7,8 @@
     "allowedExitCodes": [0, 1]
   },
   "mcp": {
-    "env": {
-      "OPENAI_API_BASE": "https://openrouter.ai/api/v1",
-      "OPENAI_MODEL": "qwen/qwen3-embedding-8b"
-    },
     "secretEnv": {
-      "LICENSE_KEY": "ONERPA_LICENSE_KEY",
-      "OPENAI_API_KEY": "OPENROUTER_API_KEY"
+      "LICENSE_KEY": "ONERPA_LICENSE_KEY"
     }
   },
   "smokeTest": {
@@ -32,7 +27,7 @@
       "timeoutSeconds": 120,
       "checkIntervalSeconds": 5,
       "acceptableHttpStatusCodes": [200, 400, 404, 405],
-      "requireChromaNotEmpty": true,
+      "requireIndexStorageNotEmpty": true,
       "logTailLines": 2000,
       "logErrorPatterns": [
         "Traceback",

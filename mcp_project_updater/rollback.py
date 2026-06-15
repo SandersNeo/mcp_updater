@@ -29,14 +29,14 @@ def perform_automatic_rollback(
 ) -> None:
     timestamp_provider = timestamp_provider or (lambda: datetime.now().strftime("%Y%m%d-%H%M%S"))
     staging_root = config.paths.staging_root
-    chroma_root = config.paths.chroma_root
+    index_storage_root = config.paths.index_storage_root
 
     current_staging = staging_root / "current"
     previous_staging = staging_root / "previous"
-    current_chroma = chroma_root / "current"
-    previous_chroma = chroma_root / "previous"
+    current_index_storage = index_storage_root / "current"
+    previous_index_storage = index_storage_root / "previous"
 
-    if not previous_staging.exists() or not previous_chroma.exists():
+    if not previous_staging.exists() or not previous_index_storage.exists():
         raise RollbackError("Automatic rollback is impossible: previous artifacts are missing.")
 
     remove_container(config.mcp.production.container_name, runner=docker_runner, error_code=ExitCode.ROLLBACK_FAILED)
@@ -44,13 +44,13 @@ def perform_automatic_rollback(
     if config.rollback.preserve_failed_index:
         failed_suffix = timestamp_provider()
         _move_if_exists(current_staging, staging_root / f"failed-{failed_suffix}")
-        _move_if_exists(current_chroma, chroma_root / f"failed-{failed_suffix}")
+        _move_if_exists(current_index_storage, index_storage_root / f"failed-{failed_suffix}")
     else:
         _remove_if_exists(current_staging)
-        _remove_if_exists(current_chroma)
+        _remove_if_exists(current_index_storage)
 
     shutil.move(str(previous_staging), str(current_staging))
-    shutil.move(str(previous_chroma), str(current_chroma))
+    shutil.move(str(previous_index_storage), str(current_index_storage))
 
     start_production_container(config.mcp, config.paths, runner=docker_runner)
     try:
@@ -71,14 +71,19 @@ def perform_manual_rollback(
     production_smoke_runner: Callable[[ProjectConfig], object],
 ) -> None:
     staging_root = config.paths.staging_root
-    chroma_root = config.paths.chroma_root
+    index_storage_root = config.paths.index_storage_root
 
     current_staging = staging_root / "current"
     previous_staging = staging_root / "previous"
-    current_chroma = chroma_root / "current"
-    previous_chroma = chroma_root / "previous"
+    current_index_storage = index_storage_root / "current"
+    previous_index_storage = index_storage_root / "previous"
 
-    if not current_staging.exists() or not previous_staging.exists() or not current_chroma.exists() or not previous_chroma.exists():
+    if (
+        not current_staging.exists()
+        or not previous_staging.exists()
+        or not current_index_storage.exists()
+        or not previous_index_storage.exists()
+    ):
         raise RollbackError("Manual rollback cannot proceed: current/previous artifacts are missing.", ExitCode.INVALID_STATE)
 
     current_commit = state_store.read_current_commit()
@@ -89,17 +94,17 @@ def perform_manual_rollback(
     remove_container(config.mcp.production.container_name, runner=docker_runner, error_code=ExitCode.ROLLBACK_FAILED)
 
     temp_staging = staging_root / "_rollback_temp_current"
-    temp_chroma = chroma_root / "_rollback_temp_current"
+    temp_index_storage = index_storage_root / "_rollback_temp_current"
     _remove_if_exists(temp_staging)
-    _remove_if_exists(temp_chroma)
+    _remove_if_exists(temp_index_storage)
 
     shutil.move(str(current_staging), str(temp_staging))
     shutil.move(str(previous_staging), str(current_staging))
     shutil.move(str(temp_staging), str(previous_staging))
 
-    shutil.move(str(current_chroma), str(temp_chroma))
-    shutil.move(str(previous_chroma), str(current_chroma))
-    shutil.move(str(temp_chroma), str(previous_chroma))
+    shutil.move(str(current_index_storage), str(temp_index_storage))
+    shutil.move(str(previous_index_storage), str(current_index_storage))
+    shutil.move(str(temp_index_storage), str(previous_index_storage))
 
     start_production_container(config.mcp, config.paths, runner=docker_runner)
     try:

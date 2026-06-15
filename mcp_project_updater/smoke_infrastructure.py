@@ -26,14 +26,14 @@ class InfrastructureSmokeContext:
     container_name: str
     host_port: int
     url: str
-    chroma_path: Path
+    index_storage_path: Path
 
 
 @dataclass(slots=True)
 class InfrastructureSmokeResult:
     http_status_code: int
     logs_checked: bool
-    chroma_non_empty: bool
+    index_storage_non_empty: bool
 
 
 HttpStatusGetter = Callable[[str], int]
@@ -92,14 +92,14 @@ def run_infrastructure_smoke_test(
             sleep(smoke_config.check_interval_seconds)
             continue
 
-        if not context.chroma_path.exists():
-            last_failure = f"Chroma path does not exist: {context.chroma_path}"
+        if not context.index_storage_path.exists():
+            last_failure = f"MCP index storage path does not exist: {context.index_storage_path}"
             sleep(smoke_config.check_interval_seconds)
             continue
 
-        chroma_non_empty = _is_directory_non_empty(context.chroma_path)
-        if smoke_config.require_chroma_not_empty and not chroma_non_empty:
-            last_failure = f"Chroma path is empty: {context.chroma_path}"
+        index_storage_non_empty = _is_directory_non_empty(context.index_storage_path)
+        if smoke_config.require_index_storage_not_empty and not index_storage_non_empty:
+            last_failure = f"MCP index storage path is empty: {context.index_storage_path}"
             sleep(smoke_config.check_interval_seconds)
             continue
 
@@ -121,7 +121,7 @@ def run_infrastructure_smoke_test(
         return InfrastructureSmokeResult(
             http_status_code=http_status,
             logs_checked=True,
-            chroma_non_empty=chroma_non_empty,
+            index_storage_non_empty=index_storage_non_empty,
         )
 
     raise InfrastructureSmokeError(last_failure)

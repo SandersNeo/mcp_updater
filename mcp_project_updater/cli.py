@@ -41,6 +41,7 @@ class CliOptions:
     no_git_pull: bool = False
     rollback: bool = False
     promote_existing_build: bool = False
+    storage_migration: bool = False
     promote_commit: str | None = None
     promote_source_fingerprint: str | None = None
     promote_report_hash: str | None = None
@@ -52,13 +53,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Update MCP project index from a Git repository.")
     parser.add_argument("--config", required=True, help="Path to project.json")
     parser.add_argument("--force", action="store_true", help="Reindex the current commit even if unchanged.")
+    parser.add_argument(
+        "--storage-migration",
+        action="store_true",
+        help="Run ChromaDB to zvec storage cutover without seeding build storage from current storage.",
+    )
     parser.add_argument("--no-git-pull", action="store_true", help="Use current HEAD without git fetch/pull.")
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument("--rollback", action="store_true", help="Run manual rollback current <-> previous.")
     mode_group.add_argument(
         "--promote-existing-build",
         action="store_true",
-        help="Accept existing staging/build and chroma/build without rerunning parser or starting a new build container.",
+        help="Accept existing staging/build and index storage build without rerunning parser or starting a new build container.",
     )
     parser.add_argument("--promote-commit", help="Commit to record when promoting an existing build.")
     parser.add_argument("--promote-source-fingerprint", help="Source fingerprint to record when promoting an existing build.")
@@ -69,13 +75,21 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def parse_args(argv: Sequence[str] | None = None) -> CliOptions:
-    namespace = build_parser().parse_args(argv)
+    parser = build_parser()
+    namespace = parser.parse_args(argv)
+    if namespace.storage_migration and namespace.force:
+        parser.error("--storage-migration cannot be combined with --force.")
+    if namespace.storage_migration and namespace.rollback:
+        parser.error("--storage-migration cannot be combined with --rollback.")
+    if namespace.storage_migration and namespace.promote_existing_build:
+        parser.error("--storage-migration cannot be combined with --promote-existing-build.")
     return CliOptions(
         config_path=Path(namespace.config),
         force=namespace.force,
         no_git_pull=namespace.no_git_pull,
         rollback=namespace.rollback,
         promote_existing_build=namespace.promote_existing_build,
+        storage_migration=namespace.storage_migration,
         promote_commit=namespace.promote_commit,
         promote_source_fingerprint=namespace.promote_source_fingerprint,
         promote_report_hash=namespace.promote_report_hash,
@@ -107,7 +121,15 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
     lock_manager = LockManager(
         state_store.lock_path,
         config.project,
-        "rollback" if options.rollback else ("promote" if options.promote_existing_build else ("dry-run" if options.dry_run else "update")),
+        (
+            "rollback"
+            if options.rollback
+            else (
+                "promote"
+                if options.promote_existing_build
+                else ("storage-migration" if options.storage_migration else ("dry-run" if options.dry_run else "update"))
+            )
+        ),
     )
 
     lock_manager.acquire()
@@ -180,22 +202,24 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
         source_fingerprint = compute_source_fingerprint(source_result)
         logger.info("Source fingerprint: %s", source_fingerprint)
         current_report_exists = (config.paths.staging_root / "current" / "metadata" / "Report.txt").exists()
-        current_chroma_path = config.paths.chroma_root / "current"
-        current_chroma_exists = current_chroma_path.exists()
+        current_index_storage_path = config.paths.index_storage_root / "current"
+        current_index_storage_exists = current_index_storage_path.exists()
         if (
             target_commit == state_snapshot.last_indexed_commit
             and source_fingerprint == state_snapshot.last_source_fingerprint
             and not options.force
+            and not options.storage_migration
             and current_report_exists
-            and current_chroma_exists
+            and current_index_storage_exists
         ):
             logger.info("No changes detected. Update is skipped.")
             return ExitCode.SUCCESS
         if (
             source_fingerprint == state_snapshot.last_source_fingerprint
             and not options.force
+            and not options.storage_migration
             and current_report_exists
-            and current_chroma_exists
+            and current_index_storage_exists
         ):
             logger.info("No effective source changes detected. Update is skipped.")
             return ExitCode.SUCCESS
@@ -232,14 +256,19 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
         report_hash = compute_report_hash(report_result.report_path)
         metadata_unchanged = (
             not options.force
+            and not options.storage_migration
             and report_hash == state_snapshot.last_report_hash
             and current_report_exists
-            and current_chroma_exists
+            and current_index_storage_exists
         )
-        reuse_current_chroma = not options.force and current_chroma_exists
+        reuse_current_index_storage = (
+            not options.force
+            and not options.storage_migration
+            and current_index_storage_exists
+        )
         logger.info("Report hash: %s", report_hash)
         logger.info("Metadata unchanged: %s", metadata_unchanged)
-        logger.info("Reusing current Chroma baseline for build: %s", reuse_current_chroma)
+        logger.info("Reusing current MCP index storage baseline for build: %s", reuse_current_index_storage)
 
         stage = "code_prepare"
         prepare_build_code_directory(build_paths, source_result)
@@ -255,8 +284,8 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
             build_paths,
             config.paths,
             runner=default_docker_runner,
-            reset_database=False if reuse_current_chroma else None,
-            seed_chroma_from=current_chroma_path if reuse_current_chroma else None,
+            reset_database=False if reuse_current_index_storage else None,
+            seed_index_storage_from=current_index_storage_path if reuse_current_index_storage else None,
             index_metadata=False if metadata_unchanged else None,
         )
         logger.info("Started build container: %s", config.mcp.build.container_name)
@@ -268,7 +297,7 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
                 container_name=config.mcp.build.container_name,
                 host_port=config.mcp.build.host_port,
                 url=config.mcp.build.url,
-                chroma_path=config.paths.chroma_root / "build",
+                index_storage_path=config.paths.index_storage_root / "build",
             ),
             runner=default_docker_runner,
         )
@@ -311,6 +340,7 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
             target_commit,
             production_log_path,
             docker_runner=default_docker_runner,
+            storage_migration=options.storage_migration,
         )
         logger.info("Production switch completed for commit %s", switch_result.target_commit)
         if source_fingerprint is not None:
@@ -334,8 +364,16 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
             log_path=log_path,
         )
     except UpdaterError as exc:
-        rollback_attempted = exc.exit_code in {ExitCode.PRODUCTION_SMOKE_FAILED, ExitCode.ROLLBACK_FAILED}
-        rollback_success = True if exc.exit_code == ExitCode.PRODUCTION_SMOKE_FAILED else (False if exc.exit_code == ExitCode.ROLLBACK_FAILED else None)
+        rollback_attempted = getattr(
+            exc,
+            "rollback_attempted",
+            exc.exit_code in {ExitCode.PRODUCTION_SMOKE_FAILED, ExitCode.ROLLBACK_FAILED},
+        )
+        rollback_success = (
+            True
+            if rollback_attempted and exc.exit_code == ExitCode.PRODUCTION_SMOKE_FAILED
+            else (False if exc.exit_code == ExitCode.ROLLBACK_FAILED else None)
+        )
         _handle_failure_notification_and_cleanup(
             config,
             NotificationPayload(
@@ -407,8 +445,8 @@ def run_promote_existing_build(
 
     build_root = config.paths.staging_root / "build"
     build_paths = _existing_build_paths(config)
-    build_chroma = config.paths.chroma_root / "build"
-    if not build_root.exists() or not build_chroma.exists():
+    build_index_storage = config.paths.index_storage_root / "build"
+    if not build_root.exists() or not build_index_storage.exists():
         raise UpdaterError("Existing build artifacts are missing; cannot promote staging/build.", ExitCode.PRODUCTION_SWITCH_FAILED)
 
     ensure_repo_available(config.repo, no_git_pull=options.no_git_pull, env=config.secrets_values)
@@ -450,7 +488,7 @@ def run_promote_existing_build(
             container_name=config.mcp.build.container_name,
             host_port=config.mcp.build.host_port,
             url=config.mcp.build.url,
-            chroma_path=build_chroma,
+            index_storage_path=build_index_storage,
         ),
         runner=default_docker_runner,
     )
@@ -510,13 +548,15 @@ def _log_dry_run_summary(
 ) -> None:
     logger.info("Dry-run mode enabled.")
     logger.info(
-        "Options: force=%s no_git_pull=%s rollback=%s verbose=%s",
+        "Options: force=%s storage_migration=%s no_git_pull=%s rollback=%s verbose=%s",
         options.force,
+        options.storage_migration,
         options.no_git_pull,
         options.rollback,
         options.verbose,
     )
     logger.info("Repository path: %s", config.repo.path)
+    logger.info("MCP index storage root: %s", config.paths.index_storage_root)
     logger.info("Branch: %s", config.repo.branch)
     logger.info("Target commit: %s", target_commit)
     logger.info("Last indexed commit: %s", state_snapshot.last_indexed_commit or "<none>")

@@ -62,6 +62,23 @@ def remove_container(
     raise DockerOperationError(_render_error(result, f"Failed to remove container '{container_name}'."), error_code)
 
 
+def stop_container(
+    container_name: str,
+    *,
+    runner: DockerCommandRunner = default_docker_runner,
+    error_code: int = ExitCode.PRODUCTION_SMOKE_FAILED,
+) -> None:
+    result = runner(["docker", "stop", container_name], Path.cwd())
+    if result.returncode == 0:
+        return
+
+    combined = f"{result.stdout}\n{result.stderr}".lower()
+    if "no such container" in combined:
+        return
+
+    raise DockerOperationError(_render_error(result, f"Failed to stop container '{container_name}'."), error_code)
+
+
 def run_docker_command(
     command: Sequence[str],
     *,

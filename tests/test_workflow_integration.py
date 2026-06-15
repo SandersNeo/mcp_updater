@@ -74,7 +74,7 @@ def test_run_update_integration_updates_state_and_current_artifacts(tmp_path: Pa
     assert state_store.read_current_commit() == "commit-001"
     assert state_store.read_last_indexed_commit() == "commit-001"
     assert (config.paths.staging_root / "current" / "code" / "cf" / "module.bsl").exists()
-    assert (config.paths.chroma_root / "current").is_dir()
+    assert (config.paths.index_storage_root / "current").is_dir()
     assert (config.paths.logs_root / "integration-mcp-build.log").exists()
     assert (config.paths.logs_root / "integration-mcp-production.log").exists()
 
@@ -96,8 +96,8 @@ def test_run_rollback_integration_swaps_current_and_previous(tmp_path: Path, mon
 
     _create_artifact_tree(config.paths.staging_root / "current", marker="current-version")
     _create_artifact_tree(config.paths.staging_root / "previous", marker="previous-version")
-    _create_artifact_tree(config.paths.chroma_root / "current", marker="current-chroma")
-    _create_artifact_tree(config.paths.chroma_root / "previous", marker="previous-chroma")
+    _create_artifact_tree(config.paths.index_storage_root / "current", marker="current-index-storage")
+    _create_artifact_tree(config.paths.index_storage_root / "previous", marker="previous-index-storage")
     state_store.write_current_commit("commit-current")
     state_store.write_previous_commit("commit-previous")
 
@@ -136,8 +136,8 @@ def test_run_rollback_returns_warning_when_notification_fails(tmp_path: Path, mo
 
     _create_artifact_tree(config.paths.staging_root / "current", marker="current-version")
     _create_artifact_tree(config.paths.staging_root / "previous", marker="previous-version")
-    _create_artifact_tree(config.paths.chroma_root / "current", marker="current-chroma")
-    _create_artifact_tree(config.paths.chroma_root / "previous", marker="previous-chroma")
+    _create_artifact_tree(config.paths.index_storage_root / "current", marker="current-index-storage")
+    _create_artifact_tree(config.paths.index_storage_root / "previous", marker="previous-index-storage")
     state_store.write_current_commit("commit-current")
     state_store.write_previous_commit("commit-previous")
     state_store.write_last_indexed_commit("indexed-commit")
@@ -186,6 +186,7 @@ def _write_config(tmp_path: Path) -> Path:
         },
         "mcp": {
             "image": "comol/1c_code_metadata_mcp:light",
+            "indexStorageRoot": str(tmp_path / "index-storage"),
             "containerPort": 8000,
             "production": {
                 "containerName": "mcp-orders",
@@ -224,7 +225,7 @@ def _write_config(tmp_path: Path) -> Path:
                 "checkIntervalSeconds": 5,
                 "httpReadyUrl": "http://localhost:18100/mcp",
                 "acceptableHttpStatusCodes": [200],
-                "requireChromaNotEmpty": True,
+                "requireIndexStorageNotEmpty": True,
                 "logTailLines": 100,
                 "logErrorPatterns": ["Traceback"],
                 "logReadyPatterns": ["Started"],

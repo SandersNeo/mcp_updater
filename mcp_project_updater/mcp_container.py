@@ -32,8 +32,8 @@ class ContainerStartResult:
     container_id: str
 
 
-def prepare_chroma_build(chroma_root: Path, *, seed_source: Path | None = None) -> Path:
-    build_path = chroma_root / "build"
+def prepare_index_storage_build(index_storage_root: Path, *, seed_source: Path | None = None) -> Path:
+    build_path = index_storage_root / "build"
     if build_path.exists():
         shutil.rmtree(build_path)
     if seed_source is not None and seed_source.exists():
@@ -41,6 +41,10 @@ def prepare_chroma_build(chroma_root: Path, *, seed_source: Path | None = None) 
     else:
         build_path.mkdir(parents=True, exist_ok=True)
     return build_path
+
+
+def prepare_chroma_build(chroma_root: Path, *, seed_source: Path | None = None) -> Path:
+    return prepare_index_storage_build(chroma_root, seed_source=seed_source)
 
 
 def resolve_secret_environment(secret_env_mapping: dict[str, str], secrets: dict[str, str]) -> dict[str, str]:
@@ -79,7 +83,7 @@ def build_runtime_container_command(
     *,
     metadata_path: Path,
     code_path: Path,
-    chroma_path: Path,
+    index_storage_path: Path,
     reset_database: bool,
     index_metadata: bool,
     index_code: bool,
@@ -127,7 +131,7 @@ def build_runtime_container_command(
             "-v",
             f"{code_path}:/app/code",
             "-v",
-            f"{chroma_path}:/app/chroma_db",
+            f"{index_storage_path}:{mcp_config.index_container_path}",
             mcp_config.image,
         ]
     )
@@ -149,7 +153,7 @@ def build_build_container_command(
         mcp_config.build,
         metadata_path=build_paths.metadata,
         code_path=build_paths.code,
-        chroma_path=paths_config.chroma_root / "build",
+        index_storage_path=paths_config.index_storage_root / "build",
         reset_database=reset_database,
         index_metadata=index_metadata,
         index_code=index_code,
@@ -167,7 +171,7 @@ def build_production_container_command(
         mcp_config.production,
         metadata_path=paths_config.staging_root / "current" / "metadata",
         code_path=paths_config.staging_root / "current" / "code",
-        chroma_path=paths_config.chroma_root / "current",
+        index_storage_path=paths_config.index_storage_root / "current",
         reset_database=False,
         index_metadata=mcp_config.index_metadata,
         index_code=mcp_config.index_code,
@@ -208,7 +212,7 @@ def start_build_container(
     *,
     runner: DockerCommandRunner,
     reset_database: bool | None = None,
-    seed_chroma_from: Path | None = None,
+    seed_index_storage_from: Path | None = None,
     index_metadata: bool | None = None,
     index_code: bool | None = None,
     index_help: bool | None = None,
@@ -217,7 +221,7 @@ def start_build_container(
     effective_index_metadata = mcp_config.index_metadata if index_metadata is None else index_metadata
     effective_index_code = mcp_config.index_code if index_code is None else index_code
     effective_index_help = mcp_config.index_help if index_help is None else index_help
-    prepare_chroma_build(paths_config.chroma_root, seed_source=seed_chroma_from)
+    prepare_index_storage_build(paths_config.index_storage_root, seed_source=seed_index_storage_from)
     remove_container(
         mcp_config.build.container_name,
         runner=runner,
@@ -233,13 +237,13 @@ def start_build_container(
         index_help=effective_index_help,
     )
     logger.info(
-        "Starting build container '%s' with flags: reset_database=%s index_metadata=%s index_code=%s index_help=%s seed_chroma_from=%s",
+        "Starting build container '%s' with flags: reset_database=%s index_metadata=%s index_code=%s index_help=%s seed_index_storage_from=%s",
         mcp_config.build.container_name,
         effective_reset_database,
         effective_index_metadata,
         effective_index_code,
         effective_index_help,
-        str(seed_chroma_from) if seed_chroma_from is not None else "<none>",
+        str(seed_index_storage_from) if seed_index_storage_from is not None else "<none>",
     )
     logger.info("Build container command: %s", format_container_command_for_log(command))
     result = run_docker_command(

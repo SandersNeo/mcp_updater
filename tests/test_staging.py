@@ -45,6 +45,7 @@ def _write_config(tmp_path: Path) -> Path:
         },
         "mcp": {
             "image": "comol/1c_code_metadata_mcp:light",
+            "indexStorageRoot": str(tmp_path / "index-storage"),
             "containerPort": 8000,
             "production": {"containerName": "prod", "hostPort": 8100, "url": "http://localhost:8100/mcp"},
             "build": {"containerName": "build", "hostPort": 18100, "url": "http://localhost:18100/mcp"},
@@ -75,7 +76,7 @@ def _write_config(tmp_path: Path) -> Path:
                 "checkIntervalSeconds": 5,
                 "httpReadyUrl": "http://localhost:18100/mcp",
                 "acceptableHttpStatusCodes": [200],
-                "requireChromaNotEmpty": True,
+                "requireIndexStorageNotEmpty": True,
                 "logTailLines": 100,
                 "logErrorPatterns": ["Traceback"],
                 "logReadyPatterns": ["Started"],

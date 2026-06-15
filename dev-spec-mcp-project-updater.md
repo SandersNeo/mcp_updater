@@ -1,1757 +1,314 @@
 # Dev Spec: MCP Project Updater
 
-## 0. Authoritative implementation contract
+## 1. Scope
 
-Этот раздел фиксирует актуальную модель реализации и имеет приоритет над более ранними примерами ниже по документу.
+Реализация updater должна поддерживать zvec-backed CodeMetadata MCP с текущим default container interface:
 
-- `load_project_config()` читает `project.json`, затем выводит все служебные пути из `paths.root`.
-- `repo.path` не читается из config и всегда равен `<paths.root>/repo`.
-- `paths.staging_root`, `paths.chroma_root`, `paths.state_root`, `paths.logs_root` не читаются из config и всегда равны `<paths.root>/staging`, `<paths.root>/chroma`, `<paths.root>/state`, `<paths.root>/logs`.
-- `parser` и `smokeTest` запрещены в `project.json`; они читаются только из `<paths.root.parent>/settings.global.json`.
-- `settings.global.json` обязан содержать `parser`, `smokeTest`, `smokeTest.toolSmokeTest`; `toolSmokeTest.url` в нем запрещен.
-- `OPENAI_API_BASE` и `OPENAI_MODEL` читаются только из `settings.mcp.env`, а не из project-level `mcp.env`.
-- `mcp.secretEnv` из settings задает mapping container env -> secret name; значения секретов читаются из `<paths.root.parent>/secrets.global.json` и `<paths.root>/secrets.local.json`.
-- GitLab token берется по `repo.auth.tokenSecret` из secrets files.
-- Notification webhook берется по `notifications.webhookUrlSecret` из secrets files.
-- Build tool smoke-test всегда получает URL из `mcp.build.url`.
-- Production tool smoke-test всегда получает URL из `mcp.production.url`.
-- Разрешенные MCP images: `comol/1c_code_metadata_mcp:light` и `comol/1c_code_metadata_mcp:latest`.
+- `/app/metadata`
+- `/app/code`
+- `/app/chroma_db` как default index storage mount target
+- port `8000`
+- stable images `comol/1c_code_metadata_mcp:light` и `comol/1c_code_metadata_mcp:latest`
 
-## 1. Назначение
+Внутренний формат index storage для updater непрозрачен.
+Container mount target не выводится из backend name: `zvec` не означает автоматический переход на `/app/zvec_db`.
 
-Разработать набор утилит для автоматического обновления MCP-индекса проекта 1С из Git.
+## 2. Config Model
 
-Основной компонент:
+`PathsConfig`:
 
-```text
-update_mcp_project.py
+```python
+@dataclass(slots=True)
+class PathsConfig:
+    root: Path
+    staging_root: Path
+    index_storage_root: Path
+    state_root: Path
+    logs_root: Path
+
+    @property
+    def chroma_root(self) -> Path:
+        return self.index_storage_root
 ```
 
-Это кроссплатформенное Python-ядро, которое выполняет:
+`chroma_root` остается только compatibility alias. Новая логика должна использовать `index_storage_root`.
 
-```text
-Git update / HEAD detection
-  ↓
-staging/build
-  ↓
-generate-config-report
-  ↓
-metadata/Report.txt + code/
-  ↓
-MCP build container
-  ↓
-smoke-test
-  ↓
-switch build → current
-  ↓
-production MCP restart
-  ↓
-state update
+`mcp.indexStorageRoot` обязателен для каждого project config.
+
+`MCPConfig` содержит:
+
+```python
+index_container_path: str = "/app/chroma_db"
 ```
 
-Вспомогательные компоненты:
+`mcp.indexContainerPath` опционален. Если он задан, config validation требует absolute Unix-style container path без Windows drive/backslash syntax.
 
-```text
-update-mcp-project.ps1  — тонкая Windows-обертка для Task Scheduler
-mcp_smoke_test.py       — MCP tool smoke-test
+`settings.mcp.secretEnv` используется для универсальных MCP secrets, например `LICENSE_KEY`. Проектные `mcp.env` и `mcp.secretEnv` используются для опциональных OpenAI/OpenRouter параметров конкретного проекта. `OPENAI_API_BASE`, `OPENAI_MODEL` и `OPENAI_API_KEY` не должны быть глобально обязательными: если project config не задает эти поля, validation не требует `OPENROUTER_API_KEY`, а Docker command не должен содержать `OPENAI_API_BASE`, `OPENAI_MODEL`, `OPENAI_API_KEY`.
+
+Validation:
+
+- missing `mcp.indexStorageRoot` -> `ConfigValidationError`;
+- Windows path должен начинаться с `\\wsl.localhost\` или `\\wsl$\`;
+- Linux path должен быть absolute;
+- storage path или parent должен быть доступен до Git/parser/Docker операций;
+- `mcp.image` должен входить в stable allow-list.
+
+## 3. Smoke Config Model
+
+`InfrastructureSmokeConfig` использует:
+
+```python
+require_index_storage_not_empty: bool
 ```
 
-`generate-config-report` считается готовым внешним компонентом. Он вызывается updater-ом как CLI и формирует `Report.txt`, diagnostics и logs. Парсер поддерживает config JSON, `mainConfigPath`, `extensionPath`, `mainConfigRequired`, `extensionRequired`, `buildXmlOverrides`, `generatorSettingsPath`, diagnostics и logs.
+Парсинг:
 
----
+- сначала читать `settings.smokeTest.infrastructure.requireIndexStorageNotEmpty`;
+- если новое имя отсутствует, читать legacy `requireChromaNotEmpty`;
+- если оба отсутствуют, падать с ошибкой по `settings.smokeTest.infrastructure.requireIndexStorageNotEmpty`;
+- если заданы оба, новое имя имеет приоритет.
 
-## 2. Ключевые проектные решения
-
-### 2.1. Python — ядро, PowerShell — только wrapper
-
-Запрещено реализовывать бизнес-логику updater-а в PowerShell.
-
-Правильно:
-
-```text
-update_mcp_project.py
-  вся логика обновления, staging, Docker, smoke-test, switch, rollback
-
-update-mcp-project.ps1
-  только принимает параметры, вызывает Python, возвращает exit code
-```
-
-### 2.2. Jenkins/GitLab CI Runner не используются в MVP
-
-MVP запускается через Windows Task Scheduler.
-
-При этом код должен быть готов к будущему запуску на Linux:
-
-```bash
-python3 update_mcp_project.py --config /opt/mcp-1c/projects/orders.json
-```
-
-### 2.3. Один проект = один MCP production endpoint
-
-Для каждой конфигурации/проекта свой MCP:
-
-```text
-orders production → http://localhost:8100/mcp
-orders build      → http://localhost:18100/mcp
-
-zup production    → http://localhost:8200/mcp
-zup build         → http://localhost:18200/mcp
-```
-
-Внутри контейнера MCP слушает порт `8000`, а снаружи используется свой `hostPort` через Docker mapping `-p <hostPort>:8000`.
-
-### 2.4. Ready по логам не является гарантией готовности индекса
-
-Логи используются только как диагностика.
-
-Готовность build-индекса для switch должна подтверждаться:
-
-```text
-1. infrastructure smoke-test;
-2. MCP tool smoke-test, если включен.
-```
-
-`mcp_smoke_test.py` должен быть полноценным MCP-клиентом, а не простым `curl`.
-
----
-
-## 3. Целевая структура проекта updater-а
-
-```text
-mcp_project_updater/
-  __init__.py
-  cli.py
-  config.py
-  constants.py
-  errors.py
-  logging_setup.py
-
-  git_ops.py
-  source_detector.py
-  staging.py
-  parser_runner.py
-  report_validator.py
-
-  docker_ops.py
-  mcp_container.py
-  smoke_infrastructure.py
-  smoke_tool.py
-
-  state.py
-  lock.py
-  switcher.py
-  rollback.py
-  notifications.py
-
-  utils.py
-
-update_mcp_project.py
-update-mcp-project.ps1
-
-mcp_smoke_test/
-  __init__.py
-  cli.py
-  client.py
-  result.py
-
-mcp_smoke_test.py
-
-tests/
-  test_config.py
-  test_source_detector.py
-  test_report_validator.py
-  test_state.py
-  test_lock.py
-  test_switcher.py
-  test_notifications.py
-```
-
-Для MVP допустимо держать модули в одной папке без установки пакета, но структура должна позволять позже сделать installable CLI.
-
----
+Diagnostic messages должны использовать `MCP index storage path`.
 
 ## 4. CLI
 
-### 4.1. Основной Python CLI
+`CliOptions`:
 
-```powershell
-python E:\mcp-1c\tools\mcp-project-updater\update_mcp_project.py `
-  --config E:\mcp-1c\projects\orders.json
+```python
+@dataclass(slots=True)
+class CliOptions:
+    config_path: Path
+    force: bool = False
+    no_git_pull: bool = False
+    rollback: bool = False
+    promote_existing_build: bool = False
+    storage_migration: bool = False
+    promote_commit: str | None = None
+    promote_source_fingerprint: str | None = None
+    promote_report_hash: str | None = None
+    verbose: bool = False
+    dry_run: bool = False
 ```
 
-### 4.2. CLI параметры
+`--storage-migration` запрещен вместе с:
+
+- `--force`
+- `--rollback`
+- `--promote-existing-build`
+
+`--force` не является migration marker. Это только rebuild control текущего configured `mcp.indexStorageRoot`.
+
+PowerShell wrapper `update-mcp-project.ps1` должен прокидывать `-StorageMigration` в `--storage-migration`.
+
+## 5. Container Commands
+
+Host-side storage path:
+
+- build: `paths.index_storage_root / "build"`
+- production: `paths.index_storage_root / "current"`
+
+Container mount target берется из `mcp.indexContainerPath`, default `/app/chroma_db`:
 
 ```text
---config <path>       обязательный путь к project.json
---force               переиндексировать текущий commit даже без изменений
---no-git-pull         не делать git fetch/pull, использовать текущий HEAD
---rollback            выполнить ручной rollback current ↔ previous
---verbose             подробный лог
---dry-run             проверить config/source/state без parser/Docker/switch
+-v <index_storage_path>:<mcp.indexContainerPath>
 ```
 
-### 4.3. PowerShell wrapper
+Updater не добавляет automatic `docker pull`. Обновление image является manual prerequisite.
 
-Файл:
+## 6. Build Storage Preparation
 
-```text
-update-mcp-project.ps1
+Функция подготовки build storage:
+
+```python
+def prepare_index_storage_build(index_storage_root: Path, *, seed_source: Path | None = None) -> Path:
+    ...
 ```
 
 Поведение:
 
-```text
-1. принимает -Config, -Force, -NoGitPull, -Rollback, -Verbose, -DryRun;
-2. собирает аргументы для update_mcp_project.py;
-3. вызывает python;
-4. возвращает $LASTEXITCODE.
+- удалить существующий `build`;
+- если `seed_source` задан и существует, скопировать его в `build`;
+- иначе создать пустой `build`.
+
+Legacy `prepare_chroma_build` может остаться alias-ом на время совместимости.
+
+## 7. Update Workflow
+
+В `run_update`:
+
+```python
+current_index_storage_path = config.paths.index_storage_root / "current"
+current_index_storage_exists = current_index_storage_path.exists()
 ```
 
-Логика Git, Docker, state, switch, rollback в `.ps1` запрещена.
+Skip/no-change возможен только если:
 
----
+- нет `--force`;
+- нет `--storage-migration`;
+- current report существует;
+- current index storage существует;
+- fingerprint/commit/hash условия совпали.
 
-## 5. Config schema
+Reuse current storage:
 
-### 5.1. Полный пример
-
-```json
-{
-  "project": "orders",
-
-  "repo": {
-    "path": "E:/mcp-1c/repos/orders",
-    "branch": "master",
-    "remote": "origin",
-    "pullMode": "ff-only"
-  },
-
-  "sources": {
-    "mainConfigPath": "src/cf",
-    "mainConfigRequired": false,
-    "extensionPath": "src/cfe",
-    "extensionRequired": false
-  },
-
-  "parser": {
-    "toolPath": "E:/mcp-1c/tools/generate-config-report/generate_config_report.py",
-    "encoding": "utf-8",
-    "warningsAsErrors": false,
-    "buildXmlOverrides": true,
-    "allowedExitCodes": [0, 1]
-  },
-
-  "mcp": {
-    "image": "comol/1c_code_metadata_mcp:latest",
-    "containerPort": 8000,
-
-    "production": {
-      "containerName": "mcp-orders",
-      "hostPort": 8100,
-      "url": "http://localhost:8100/mcp"
-    },
-
-    "build": {
-      "containerName": "mcp-orders-build",
-      "hostPort": 18100,
-      "url": "http://localhost:18100/mcp"
-    },
-
-    "indexCode": true,
-    "indexMetadata": true,
-    "indexHelp": false,
-
-    "resetDatabaseOnBuild": true,
-    "resetCache": false,
-    "useSse": false,
-    "useGpu": false,
-
-    "env": {
-      "METADATA_PATH": "/app/metadata",
-      "CODE_PATH": "/app/code",
-      "OPENAI_API_BASE": "http://host.docker.internal:1234/v1",
-      "OPENAI_API_KEY": "lm-studio",
-      "OPENAI_MODEL": "Qwen3-Embedding-4B"
-    },
-
-    "secretEnv": {
-      "LICENSE_KEY": "ONERPA_LICENSE_KEY"
-    }
-  },
-
-  "paths": {
-    "stagingRoot": "E:/mcp-1c/staging/orders",
-    "chromaRoot": "E:/mcp-1c/chroma/orders",
-    "stateRoot": "E:/mcp-1c/state/orders",
-    "logsRoot": "E:/mcp-1c/logs/orders"
-  },
-
-  "smokeTest": {
-    "enabled": true,
-    "profile": "production",
-
-    "reportValidation": {
-      "enabled": true,
-      "requiredReportPatterns": [
-        "^\\s*-\\s*Конфигурации\\.",
-        "Имя: \"",
-        "Синоним: \"",
-        "Комментарий: \""
-      ],
-      "forbiddenReportPatterns": [
-        "Модуль менеджера",
-        "Модуль объекта",
-        "Модуль формы",
-        "ПутьКФайлу",
-        "ФайлBSL",
-        "code/main",
-        "code/extensions",
-        "src/cf",
-        "src/cfe",
-        "ПоисковыеТеги",
-        "Источник: Основная конфигурация",
-        "Источник: Расширение"
-      ]
-    },
-
-    "infrastructure": {
-      "enabled": true,
-      "timeoutSeconds": 7200,
-      "checkIntervalSeconds": 15,
-      "httpReadyUrl": "http://localhost:18100/mcp",
-      "acceptableHttpStatusCodes": [200, 400, 404, 405],
-      "requireChromaNotEmpty": true,
-      "logTailLines": 300,
-      "logErrorPatterns": [
-        "Traceback",
-        "Exception",
-        "CRITICAL",
-        "failed",
-        "FAILED",
-        "Ошибка",
-        "ошибка"
-      ]
-    },
-
-    "toolSmokeTest": {
-      "enabled": true,
-      "toolPath": "E:/mcp-1c/tools/mcp-smoke-test/mcp_smoke_test.py",
-      "url": "http://localhost:18100/mcp",
-      "timeoutSeconds": 7200,
-
-      "metadataToolName": "metadatasearch",
-      "metadataQueryArgument": "query",
-      "metadataQueries": [
-        "Конфигурации",
-        "Документы",
-        "Справочники"
-      ],
-
-      "codeToolName": "codesearch",
-      "codeQueryArgument": "query",
-      "codeQueries": [
-        "Процедура",
-        "Функция"
-      ]
-    }
-  },
-
-  "notifications": {
-    "enabled": true,
-    "onSuccess": false,
-    "onFailure": true,
-    "onRollback": true,
-    "webhookUrlEnv": "MCP_UPDATE_WEBHOOK_URL"
-  },
-
-  "rollback": {
-    "preserveFailedIndex": true
-  },
-
-  "retention": {
-    "keepPreviousIndexes": 1,
-    "keepLogsDays": 30,
-    "keepStagingBuilds": 2
-  }
-}
+```python
+reuse_current_index_storage = (
+    not options.force
+    and not options.storage_migration
+    and current_index_storage_exists
+)
 ```
 
-Допустимы также:
+Metadata unchanged:
 
-```json
-{
-  "sources": {
-    "mainConfigPath": null,
-    "mainConfigRequired": false,
-    "extensionPath": "src/cfe",
-    "extensionRequired": true
-  }
-}
+```python
+metadata_unchanged = (
+    not options.force
+    and not options.storage_migration
+    and report_hash == state_snapshot.last_report_hash
+    and current_report_exists
+    and current_index_storage_exists
+)
 ```
 
-и
+Build start:
 
-```json
-{
-  "sources": {
-    "mainConfigPath": "src/cf",
-    "mainConfigRequired": true,
-    "extensionPath": null,
-    "extensionRequired": false
-  }
-}
+```python
+start_build_container(
+    ...,
+    reset_database=False if reuse_current_index_storage else None,
+    seed_index_storage_from=current_index_storage_path if reuse_current_index_storage else None,
+    index_metadata=False if metadata_unchanged else None,
+)
 ```
 
-### 5.2. Config validation
-
-`config.py` должен проверять:
-
-```text
-project не пустой
-repo.path существует или ошибка
-paths.* заданы
-mcp.containerPort > 0
-mcp.production.hostPort > 0
-mcp.build.hostPort > 0
-mcp.production.hostPort != mcp.build.hostPort
-mcp.production.containerName != mcp.build.containerName
-parser.toolPath существует
-если notifications.enabled=true и onFailure/onRollback=true:
-  webhookUrlEnv задан
-если smokeTest.profile не указан:
-  использовать default "dev"
-если smokeTest.profile not in ["dev", "production"]:
-  config validation error
-если smokeTest.profile="production" и toolSmokeTest.enabled=false:
-  config validation error
-если rollback.preserveFailedIndex не указан:
-  использовать default true
-```
-
-Secret env проверяются отдельно перед Docker/notifications.
-
----
-
-## 6. State model
-
-Каталог:
-
-```text
-stateRoot/
-  last_indexed_commit
-  current_commit
-  previous_commit
-  lock
-```
-
-### 6.1. `last_indexed_commit`
-
-Содержит SHA commit, который успешно прошел:
-
-```text
-parser
-Report validation
-MCP build
-smoke-test
-switch
-production smoke-test
-```
-
-Файл обновляется только в конце successful switch.
-
-### 6.2. `current_commit`
-
-Commit текущего production-индекса.
-
-### 6.3. `previous_commit`
-
-Commit предыдущего индекса, доступного для rollback.
-
-### 6.4. `lock`
-
-JSON:
-
-```json
-{
-  "pid": 1234,
-  "startedAt": "2026-05-12T10:30:00",
-  "project": "orders",
-  "mode": "update"
-}
-```
-
-Lock снимается в `finally`.
-
----
-
-## 7. Exit codes
-
-```text
-0  — обновление успешно выполнено или изменений нет
-1  — обновление выполнено, есть некритичные warnings
-2  — ошибка config-файла updater-а
-3  — не найден Git-репозиторий
-4  — рабочее дерево Git содержит tracked changes
-5  — git fetch/pull failed
-6  — отсутствуют оба источника: src/cf и src/cfe
-7  — mainConfigRequired=true, но src/cf отсутствует
-8  — extensionRequired=true, но src/cfe отсутствует
-9  — parser failed
-10 — Report.txt failed validation
-11 — Docker unavailable
-12 — MCP build container failed
-13 — MCP build smoke-test failed
-14 — production switch failed
-15 — production smoke-test failed
-16 — rollback failed
-17 — lock already exists / update already running
-18 — missing required secret env
-19 — invalid state / cannot determine current index
-```
-
-Notification failure policy:
-
-```text
-notification failed после успешного update:
-  exit code 1
-  статус: success with warning
-  production MCP остается успешным
-  last_indexed_commit уже обновлен
-
-notification failed после failed update:
-  сохранить исходный exit code ошибки update
-  notification failure записать warning
-
-notification failed после rollback:
-  сохранить rollback/failure exit code
-  notification failure записать warning
-```
-
-Ошибка уведомления не должна маскировать первопричину ошибки и не должна превращать успешный production update в hard fail.
-
-Exit code `20` не используется в основном workflow. Notification failure после успешного update возвращает exit code `1`, а после failed update/rollback сохраняет исходный код ошибки.
-
----
-
-## 8. Main workflow
-
-### 8.1. `run_update(config, options)`
-
-Алгоритм:
+Workflow logs должны использовать backend-neutral wording: `MCP index storage baseline`, не `Chroma baseline`.
 
-```text
-1. load config
-2. setup logging
-3. acquire lock
-4. validate secrets
-5. validate Git repository
-6. determine target commit
-7. compare with last_indexed_commit
-8. if no changes and not force:
-     log no changes
-     exit 0
-9. detect sources
-10. prepare build staging
-11. generate parser config
-12. run parser
-13. validate Report.txt
-14. prepare build code directory
-15. prepare chroma/build
-16. start build MCP container
-17. run infrastructure smoke-test
-18. run tool smoke-test if enabled
-19. switch build → current
-20. start production MCP
-21. run production smoke-test: production infrastructure smoke-test + MCP tool smoke-test if `toolSmokeTest.enabled=true`
-22. update state files
-23. send success notification if enabled
-24. cleanup/retention
-25. release lock
-```
+## 8. Storage Migration Mode
 
-### 8.2. Failure behavior
+`--storage-migration`:
 
-Если ошибка до switch:
+- отключает skip по совпавшему state;
+- отключает seed/reuse из `mcp.indexStorageRoot/current`;
+- не читает старый `<paths.root>/chroma/current`;
+- передает `storage_migration=True` в `perform_switch`;
+- запрещает automatic rollback при production smoke failure.
 
-```text
-production MCP не трогать
-last_indexed_commit не обновлять
-build container остановить
-build artifacts сохранить
-failure notification отправить
-exit code по ошибке
-```
+Старая ChromaDB database может быть только backup/manual recovery source.
 
-Если ошибка после switch:
+## 9. Smoke Order
 
-```text
-попытаться rollback
-last_indexed_commit не обновлять
-rollback notification отправить
-exit code 15 или 16
-```
+Общий порядок для update, storage migration и promote:
 
----
+1. build infrastructure smoke-test;
+2. build tool smoke-test;
+3. production switch;
+4. start production container;
+5. production smoke-test;
+6. state update.
 
-## 9. Git operations
+Production smoke-test не должен запускаться до switch, потому production container еще старый или не запущен.
 
-Модуль:
+## 10. Switcher
 
-```text
-git_ops.py
-```
+`perform_switch(..., storage_migration: bool = False)`:
 
-### 9.1. Проверка repo
+- проверяет `staging/build` и `index_storage_root/build`;
+- удаляет production container;
+- best-effort удаляет build container;
+- перемещает `current` в `previous`;
+- перемещает `build` в `current`;
+- стартует production container;
+- выполняет production smoke-test;
+- записывает state только после успешного smoke.
 
-Команды:
+При обычном production smoke failure:
 
-```bash
-git rev-parse --is-inside-work-tree
-git status --porcelain
-```
+- сохранить production logs;
+- вызвать `perform_automatic_rollback`;
+- выбросить `ProductionSmokeTestFailed(..., rollback_attempted=True)`.
 
-Tracked changes считаются ошибкой.
+При `storage_migration=True` и production smoke failure:
 
-Для MVP untracked files можно игнорировать, но желательно логировать warning.
+- сохранить production logs;
+- остановить неисправный production container через `docker stop`;
+- не вызывать automatic rollback;
+- выбросить `ProductionSmokeTestFailed(..., rollback_attempted=False)` с manual recovery guidance.
 
-### 9.2. Обычный режим
+## 11. Rollback
 
-```bash
-git fetch <remote> <branch>
-git checkout <branch>
-git pull --ff-only <remote> <branch>
-git rev-parse <remote>/<branch>
-```
+Rollback использует `paths.index_storage_root`:
 
-`target_commit = origin/master` или другой configured remote/branch.
+- automatic rollback: `current` -> `failed-<timestamp>` или удалить, `previous` -> `current`;
+- manual rollback: swap `current` и `previous`;
+- production container стартует после перемещения storage;
+- production smoke-test обязателен.
 
-### 9.3. `--no-git-pull`
+Automatic rollback не применяется в storage migration.
 
-```bash
-git rev-parse HEAD
-```
+## 12. Promote Existing Build
 
-`fetch/pull` не выполняются.
+`--promote-existing-build` требует:
 
-### 9.4. `--force`
+- `paths.staging_root / "build"`
+- `paths.index_storage_root / "build"`
 
-Если `--force` включен, updater не выходит при совпадении:
+Promote выполняет build smoke-tests, затем вызывает общий `perform_switch`.
 
-```text
-target_commit == last_indexed_commit
-```
+## 13. Tests
 
-а выполняет полную переиндексацию.
+Обязательные тестовые области:
 
----
+- missing `mcp.indexStorageRoot`;
+- Windows non-WSL path rejected;
+- Windows WSL path accepted;
+- Linux relative path rejected;
+- Linux absolute path accepted;
+- `mcp.indexContainerPath` default `/app/chroma_db`;
+- `mcp.indexContainerPath` override `/app/zvec_db`;
+- invalid `mcp.indexContainerPath` rejected;
+- `chroma_root` alias equals `index_storage_root`;
+- stable image allow-list excludes beta/arm64;
+- `--storage-migration` parse and flag conflicts;
+- no-seed storage migration build;
+- normal incremental seed;
+- force rebuild no-seed;
+- production smoke failure without automatic rollback in migration;
+- failed migration container stop;
+- state update only after production smoke success;
+- Docker command uses configured `mcp.indexContainerPath`;
+- new smoke config name and legacy alias;
+- backend-neutral log/diagnostic text.
 
-## 10. Source detection
+## 14. Documentation
 
-Модуль:
-
-```text
-source_detector.py
-```
-
-Вход:
-
-```text
-repo.path
-sources.mainConfigPath
-sources.mainConfigRequired
-sources.extensionPath
-sources.extensionRequired
-```
-
-Выход:
-
-```json
-{
-  "mainExists": true,
-  "extensionExists": false,
-  "mainPath": "E:/mcp-1c/repos/orders/src/cf",
-  "extensionPath": null
-}
-```
-
-Правила exit codes:
-
-```text
-mainConfigRequired=true, src/cf missing       → exit 7
-extensionRequired=true, src/cfe missing       → exit 8
-both sources missing                          → exit 6
-```
-
----
-
-## 11. Staging
-
-Модуль:
-
-```text
-staging.py
-```
-
-### 11.1. Каталоги build
-
-Перед каждым build удалять и создавать:
-
-```text
-staging/build/metadata
-staging/build/code
-staging/build/diagnostics
-staging/build/logs
-staging/build/settings
-```
-
-### 11.2. Parser config
-
-Файл:
-
-```text
-staging/build/parser-config.json
-```
-
-Генерируется updater-ом.
-
-Обязательно задавать:
-
-```json
-"generatorSettingsPath": "<stagingRoot>/build/settings/<project>.xml-overrides.json"
-```
-
-Причина: если не указать `generatorSettingsPath`, parser создаст generated overrides в своей папке `generate_config_report/settings/generated/<project>.xml-overrides.json`; для updater-а это нежелательно, потому что build должен быть самодостаточным и не должен модифицировать tool directory.
-
----
-
-## 12. Parser runner
-
-Модуль:
-
-```text
-parser_runner.py
-```
-
-Команда:
-
-```bash
-python <parser.toolPath> --config <staging/build/parser-config.json>
-```
-
-Если updater запущен с `--verbose`, добавить:
-
-```text
---verbose
-```
-
-Если требуется строгий режим:
-
-```text
---strict
-```
-
-Но основное управление strict должно идти через parser config:
-
-```json
-"warningsAsErrors": false
-```
-
-Допустимые коды:
-
-```json
-allowedExitCodes: [0, 1]
-```
-
-Если parser вернул другой код:
-
-```text
-exit 9
-не запускать Docker
-```
-
----
-
-## 13. Report validation
-
-Модуль:
-
-```text
-report_validator.py
-```
-
-Проверки:
-
-```text
-Report.txt существует
-размер > 0
-есть хотя бы одна корневая секция
-есть required patterns
-нет forbidden patterns
-diagnostics/errors = 0
-```
-
-Корневой regex:
-
-```regex
-^\s*-\s*Конфигурации\.
-```
-
-Причина: parser README фиксирует, что корневая секция начинается с табуляции перед `-`.
-
-Forbidden patterns брать из config.
-
----
-
-## 14. CODE_PATH preparation
-
-Модуль:
-
-```text
-staging.py
-```
-
-Копирование:
-
-```text
-repo/src/cf  → staging/build/code/cf
-repo/src/cfe → staging/build/code/cfe
-```
-
-Копировать только существующие источники.
-
-Запрещено:
-
-```text
-смешивать cf и cfe
-переименовывать объекты
-модифицировать XML/BSL
-```
-
-Рекомендуемая реализация:
-
-```text
-shutil.copytree(..., dirs_exist_ok=False)
-```
-
-Перед копированием `build/code` должен быть пустым.
-
----
-
-## 15. Docker operations
-
-Модули:
-
-```text
-docker_ops.py
-mcp_container.py
-```
-
-### 15.1. Проверка Docker
-
-Команда:
-
-```bash
-docker version
-```
-
-Если Docker недоступен:
-
-```text
-exit 11
-```
-
-### 15.2. Удаление старого build container
-
-Перед запуском build:
-
-```bash
-docker rm -f <buildContainerName>
-```
-
-Ошибку “container not found” игнорировать.
-
-### 15.3. Build container run
-
-Команда должна собираться из config.
-
-Пример:
+Docs/examples must state:
+
+- `mcp.indexStorageRoot` is required;
+- `mcp.indexContainerPath` defaults to `/app/chroma_db` for CodeMetadata;
+- Windows storage root must be WSL-mounted;
+- Linux storage root must be absolute native path;
+- `docker pull` is manual prerequisite;
+- `--storage-migration` is the migration marker;
+- `--force` is not a migration marker;
+- old ChromaDB database must not seed zvec build;
+- storage migration production smoke failure uses manual recovery;
+- beta/arm64 images are not supported.
+
+## 15. Verification
+
+Перед завершением:
 
 ```powershell
-docker run -d --name mcp-orders-build `
-  -e LICENSE_KEY="<from env>" `
-  -e METADATA_PATH="/app/metadata" `
-  -e CODE_PATH="/app/code" `
-  -e RESET_CACHE=false `
-  -e RESET_DATABASE=true `
-  -e USESSE=false `
-  -e OPENAI_API_BASE="http://host.docker.internal:1234/v1" `
-  -e OPENAI_API_KEY="lm-studio" `
-  -e OPENAI_MODEL="Qwen3-Embedding-4B" `
-  -p 18100:8000 `
-  -v "E:/mcp-1c/staging/orders/build/metadata:/app/metadata" `
-  -v "E:/mcp-1c/staging/orders/build/code:/app/code" `
-  -v "E:/mcp-1c/chroma/orders/build:/app/chroma_db" `
-  comol/1c_code_metadata_mcp:latest
+pytest -q
+openspec validate support-zvec-codemetadata --json
 ```
 
-Если `useGpu=true`, добавить:
+Поиском проверить, что runtime logs/docs не содержат неверных Chroma-only формулировок вне исторического контекста. Допустимые оставшиеся упоминания:
 
-```text
---gpus all
-```
-
-### 15.4. Production container run
-
-После switch:
-
-```powershell
-docker run -d --name mcp-orders `
-  ... `
-  -e RESET_DATABASE=false `
-  -p 8100:8000 `
-  -v "E:/mcp-1c/staging/orders/current/metadata:/app/metadata" `
-  -v "E:/mcp-1c/staging/orders/current/code:/app/code" `
-  -v "E:/mcp-1c/chroma/orders/current:/app/chroma_db" `
-  comol/1c_code_metadata_mcp:latest
-```
-
-Production не должен запускаться с `RESET_DATABASE=true`.
-
----
-
-## 16. Infrastructure smoke-test
-
-Модуль:
-
-```text
-smoke_infrastructure.py
-```
-
-Проверки в цикле до timeout:
-
-```text
-docker inspect container exists
-State.Status == running
-State.Restarting == false
-build hostPort доступен
-HTTP endpoint отвечает допустимым status code
-chroma/build существует
-chroma/build не пустой, если requireChromaNotEmpty=true
-docker logs не содержит error patterns
-```
-
-### 16.1. HTTP check
-
-URL:
-
-```text
-smokeTest.infrastructure.httpReadyUrl
-```
-
-Обычно:
-
-```text
-http://localhost:<buildHostPort>/mcp
-```
-
-Acceptable statuses:
-
-```text
-200, 400, 404, 405
-```
-
-Почему не только 200: MCP endpoint может не отвечать обычному GET как REST endpoint, но если есть HTTP-ответ, это лучше, чем connection refused.
-
-### 16.2. Log check
-
-Получать:
-
-```bash
-docker logs --tail <logTailLines> <container>
-```
-
-Если найден error pattern:
-
-```text
-fail infrastructure smoke-test
-exit 13
-```
-
----
-
-## 17. MCP tool smoke-test
-
-Модуль/утилита:
-
-```text
-mcp_smoke_test.py
-```
-
-### 17.1. Задача
-
-Выполнить реальные MCP calls:
-
-```text
-initialize
-tools/list
-tools/call metadatasearch
-tools/call codesearch, если indexCode=true
-```
-
-### 17.2. Рекомендуемая реализация
-
-Использовать Python MCP SDK:
-
-```text
-mcp.client.streamable_http.streamablehttp_client
-mcp.ClientSession
-```
-
-### 17.3. CLI
-
-```powershell
-python E:\mcp-1c\tools\mcp-smoke-test\mcp_smoke_test.py `
-  --url http://localhost:18100/mcp `
-  --timeout 7200 `
-  --metadata-tool metadatasearch `
-  --metadata-query-argument query `
-  --metadata-query Конфигурации `
-  --metadata-query Документы `
-  --code-tool codesearch `
-  --code-query-argument query `
-  --code-query Процедура `
-  --code-query Функция
-```
-
-Для удобства updater может передавать JSON config path вместо длинного CLI.
-
-### 17.4. Tool names и argument names
-
-Не хардкодить намертво.
-
-Использовать config:
-
-```json
-"metadataToolName": "metadatasearch",
-"metadataQueryArgument": "query",
-"codeToolName": "codesearch",
-"codeQueryArgument": "query"
-```
-
-Эти поля являются опциональными. Если они отсутствуют в `project.json`, использовать defaults выше. Если указаны — использовать значения из config.
-
-Если `tools/list` не содержит нужный tool:
-
-```text
-smoke-test failed
-exit 13
-```
-
-### 17.5. Success criteria
-
-`metadatasearch` успешен, если:
-
-```text
-tool найден
-tool call не вернул protocol error
-результат содержит непустой content/text/result
-```
-
-`codesearch` успешен, если:
-
-```text
-indexCode=true
-tool найден
-хотя бы один code query вернул непустой результат
-```
-
-Если `indexCode=false`, codesearch не проверять.
-
-### 17.6. Timeout
-
-`timeoutSeconds` общий на весь tool smoke-test.
-
----
-
-## 18. Production smoke-test
-
-### 18.0. Implementation contract
-
-Production smoke-test реализуется отдельной функцией, например:
-
-```text
-run_production_smoke_test(config, paths, smoke_config)
-```
-
-Функция обязана выполнить две проверки в указанном порядке:
-
-```text
-1. run_infrastructure_smoke_test(...), но с production context;
-2. run_tool_smoke_test(...), если toolSmokeTest.enabled=true, но с production URL.
-```
-
-Production context:
-
-```text
-containerName = mcp.production.containerName
-hostPort = mcp.production.hostPort
-url = mcp.production.url
-stagingPath = staging/current
-chromaPath = chroma/current
-```
-
-Production infrastructure smoke-test проверяет:
-
-```text
-container exists
-State.Status == running
-State.Restarting == false
-production hostPort доступен
-production HTTP endpoint отвечает acceptableHttpStatusCodes
-chroma/current существует
-chroma/current не пустой, если requireChromaNotEmpty=true
-production docker logs не содержит logErrorPatterns
-```
-
-Production tool smoke-test проверяет:
-
-```text
-tools/list доступен на mcp.production.url
-metadatasearch найден
-хотя бы один metadata query вернул непустой результат
-если indexCode=true, codesearch найден
-если indexCode=true, хотя бы один code query вернул непустой результат
-protocol/client/tool call errors отсутствуют
-```
-
-Если production smoke-test не прошел, `switcher.py` обязан инициировать automatic rollback. `last_indexed_commit`, `current_commit` и `previous_commit` не обновляются как успешные.
-
-Production smoke-test выполняется после switch и запуска production container. Это не одиночный ping и не только проверка контейнера: состав проверки всегда явно делится на infrastructure-уровень и, если включен `toolSmokeTest.enabled=true`, реальный MCP tool smoke-test.
-
-Состав проверки:
-
-```text
-1. production infrastructure smoke-test;
-2. MCP tool smoke-test, если toolSmokeTest.enabled=true.
-```
-
-Используются production-настройки:
-
-```text
-mcp.production.containerName
-mcp.production.hostPort
-mcp.production.url
-staging/current
-chroma/current
-```
-
-Infrastructure-часть проверяет:
-
-```text
-container exists
-State.Status == running
-State.Restarting == false
-production hostPort доступен
-production HTTP endpoint отвечает допустимым status code
-production docker logs не содержит error patterns
-```
-
-Tool-часть вызывает `mcp_smoke_test.py` именно на `mcp.production.url` и использует те же tool names/query argument names, что и build smoke-test. Build URL здесь использовать запрещено.
-
-Если production smoke-test не прошел, выполнить automatic rollback. `last_indexed_commit`, `current_commit` и `previous_commit` не записывать как успешные.
-
----
-
-## 19. Switch build → current
-
-Модуль:
-
-```text
-switcher.py
-```
-
-### 18.1. Preconditions
-
-Switch разрешен только если:
-
-```text
-parser success
-Report validation success
-build container started
-infrastructure smoke-test success
-tool smoke-test success, если enabled
-```
-
-### 18.2. Порядок операций
-
-```text
-1. docker rm -f production container
-2. remove previous dirs if exist
-3. move current → previous
-4. move build → current
-5. move chroma/current → chroma/previous
-6. move chroma/build → chroma/current
-7. start production container with current volumes
-8. production smoke-test: infrastructure + tool if `toolSmokeTest.enabled=true`
-9. update state:
-   previous_commit = old current_commit
-   current_commit = target_commit
-   last_indexed_commit = target_commit
-```
-
-Важный момент: порядок перемещения `staging` и `chroma` должен быть атомарно безопасным насколько возможно. Если filesystem move падает — выполнить recovery по состоянию каталогов.
-
-### 18.3. Empty current
-
-Если это первый запуск и `current` отсутствует:
-
-```text
-previous не создается
-build становится current
-production запускается
-current_commit = target_commit
-last_indexed_commit = target_commit
-previous_commit остается пустым
-```
-
-Если первый production smoke-test после такого switch падает, automatic rollback восстановить нечего: `previous` baseline еще не существует. В этом случае должен быть поднят `RollbackError` с итоговым exit code `16`.
-
----
-
-## 20. Rollback
-
-Модуль:
-
-```text
-rollback.py
-```
-
-### 19.1. Automatic rollback
-
-Если production smoke-test после switch упал:
-
-```text
-docker rm -f production
-if rollback.preserveFailedIndex=true:
-  move current → failed-<timestamp>
-  move chroma/current → failed-<timestamp>
-else:
-  delete current
-  delete chroma/current
-move previous → current
-move chroma/previous → current
-start production
-production smoke-test
-last_indexed_commit не обновлять
-notification rollback
-```
-
-Prerequisite: `previous` и `chroma/previous` уже существуют. Если это bootstrap-сценарий и baseline еще не создан, automatic rollback невозможен и должен завершаться `RollbackError(ExitCode.ROLLBACK_FAILED)`.
-
-Default:
-
-```text
-rollback.preserveFailedIndex = true
-```
-
-Если `preserveFailedIndex=true`, failed-index сохраняется для диагностики. Retention/cleanup failed-каталогов можно реализовать отдельным этапом.
-
-### 19.2. Manual rollback
-
-CLI:
-
-```bash
-python update_mcp_project.py --config <project.json> --rollback
-```
-
-Поведение:
-
-```text
-не делать git operations
-не запускать parser
-не запускать build MCP
-остановить production
-поменять current и previous
-запустить production
-проверить production smoke
-не менять last_indexed_commit без отдельного будущего флага
-```
-
-Если `current`/`previous` artifacts или `current_commit`/`previous_commit` отсутствуют, manual rollback должен завершаться ошибкой состояния и не пытаться запускать production switch.
-
----
-
-## 21. Notifications
-
-Модуль:
-
-```text
-notifications.py
-```
-
-### 20.1. Config
-
-```json
-"notifications": {
-  "enabled": true,
-  "onSuccess": false,
-  "onFailure": true,
-  "onRollback": true,
-  "webhookUrlEnv": "MCP_UPDATE_WEBHOOK_URL"
-}
-```
-
-### 20.2. Webhook payload
-
-```json
-{
-  "project": "orders",
-  "status": "failed",
-  "stage": "mcp_tool_smoke_test",
-  "targetCommit": "abc123",
-  "lastIndexedCommit": "def456",
-  "productionUntouched": true,
-  "rollbackAttempted": false,
-  "rollbackSuccess": null,
-  "logPath": "E:/mcp-1c/logs/orders/20260512-103000-update.log"
-}
-```
-
-### 20.3. Secret handling
-
-Webhook URL не логировать.
-
-Если notification failed:
-
-```text
-если update success:
-  exit code 1
-  статус success with warning
-  production MCP остается успешным
-  last_indexed_commit уже обновлен
-
-если update уже failed:
-  оставить исходный exit code ошибки update
-  notification failure записать warning
-
-если rollback выполнялся:
-  оставить rollback/failure exit code
-  notification failure записать warning
-```
-
-Notification failure не должен маскировать первопричину и не должен становиться hard fail после успешного production update.
-
----
-
-## 22. Logging
-
-Модуль:
-
-```text
-logging_setup.py
-```
-
-### 21.1. Main log
-
-Файл:
-
-```text
-logsRoot/YYYYMMDD-HHMMSS-update.log
-```
-
-Содержит:
-
-```text
-project
-mode: update/force/no-git-pull/rollback/dry-run
-repo path
-branch
-target commit
-last_indexed_commit
-sources detected
-parser command without secrets
-parser exit code
-Report.txt size
-Docker image
-build container
-production container
-build URL
-production URL
-smoke-test results
-switch result
-rollback result
-notification result
-exit code
-```
-
-### 21.2. Docker logs
-
-```text
-YYYYMMDD-HHMMSS-mcp-build.log
-YYYYMMDD-HHMMSS-mcp-production.log
-```
-
-### 21.3. Secret masking
-
-Маскировать:
-
-```text
-LICENSE_KEY
-OPENAI_API_KEY, если не lm-studio/test value
-MCP_UPDATE_WEBHOOK_URL
-Git tokens
-password
-```
-
----
-
-## 23. Retention
-
-Для MVP:
-
-```text
-хранить current
-хранить previous
-build очищать перед каждым запуском
-```
-
-Дополнительно:
-
-```text
-keepLogsDays — можно реализовать в конце update
-keepStagingBuilds — не обязательно для MVP, если build всегда один
-```
-
----
-
-## 24. Dry-run
-
-`--dry-run` должен выполнять:
-
-```text
-config load
-secret env check
-repo check
-target commit detection
-source detection
-state read
-вывод planned actions
-```
-
-Не выполнять:
-
-```text
-git pull
-parser
-Docker
-switch
-rollback
-notifications
-```
-
-Если нужен dry-run без git pull, запускать:
-
-```text
---dry-run --no-git-pull
-```
-
----
-
-## 25. Tests
-
-### 24.1. Unit tests
-
-Обязательные тесты:
-
-```text
-config validation
-source detection:
-  cf only
-  cfe only
-  cf+cfe
-  none
-  required cf missing
-  required cfe missing
-
-report validation:
-  valid root with leading tab
-  forbidden patterns
-  missing root
-  empty file
-
-state:
-  no last_indexed_commit
-  read/write current_commit
-  read/write previous_commit
-
-lock:
-  acquire
-  duplicate lock
-  stale lock
-
-switch:
-  first switch without current
-  switch with previous
-  failed production smoke triggers rollback
-
-notifications:
-  disabled
-  failure enabled
-  secret URL not logged
-```
-
-### 24.2. Integration tests with fake commands
-
-Для MVP можно mock-ать:
-
-```text
-git
-docker
-parser
-mcp_smoke_test
-```
-
-Через wrappers/adapters, чтобы не требовать реальный Docker в unit tests.
-
-### 24.3. Manual acceptance
-
-На реальном проекте:
-
-```text
-1. --dry-run --no-git-pull
-2. обычный запуск первый раз
-3. повторный запуск без изменений
-4. --force
-5. --no-git-pull
-6. отключить src/cf, оставить src/cfe
-7. сломать Report.txt validation
-8. сломать build container
-9. проверить rollback
-```
-
----
-
-## 26. Implementation phases
-
-### Phase 1. Skeleton
-
-```text
-CLI
-config load/validate
-logging
-exit codes
-PowerShell wrapper
-```
-
-### Phase 2. Git/source/state
-
-```text
-git_ops
-source_detector
-state
-lock
---force
---no-git-pull
---dry-run
-```
-
-### Phase 3. Parser/staging/report
-
-```text
-prepare build dirs
-generate parser-config.json
-run parser
-validate Report.txt
-copy code/cf/cfe
-```
-
-### Phase 4. Docker/infrastructure smoke
-
-```text
-docker availability
-run build container
-infra smoke-test
-capture docker logs
-```
-
-### Phase 5. MCP tool smoke
-
-```text
-mcp_smoke_test.py
-tools/list
-metadatasearch
-codesearch
-timeout handling
-```
-
-### Phase 6. Switch/rollback
-
-```text
-current/previous
-production container start
-production smoke-test
-automatic rollback
-manual rollback
-```
-
-### Phase 7. Notifications/retention
-
-```text
-webhook notification
-secret masking
-log cleanup
-```
-
----
-
-## 27. Acceptance criteria
-
-### AC-001. No changes
-
-Если `target_commit == last_indexed_commit` и нет `--force`:
-
-```text
-parser не запускается
-Docker не запускается
-production MCP не трогается
-exit code 0
-```
-
-### AC-002. Force
-
-Если `--force`:
-
-```text
-индексация выполняется даже для текущего commit
-last_indexed_commit после успеха равен тому же commit
-```
-
-### AC-003. NoGitPull
-
-Если `--no-git-pull`:
-
-```text
-git fetch/pull не выполняется
-target_commit = HEAD
-```
-
-### AC-004. Sources
-
-Поддерживаются:
-
-```text
-только src/cf
-только src/cfe
-src/cf + src/cfe
-```
-
-Если нет обоих:
-
-```text
-exit code 6
-production untouched
-```
-
-### AC-005. Parser integration
-
-Updater формирует parser-config.json с:
-
-```text
-outputPath = staging/build/metadata
-diagnosticsPath = staging/build/diagnostics
-logsPath = staging/build/logs
-generatorSettingsPath = staging/build/settings/<project>.xml-overrides.json
-```
-
-### AC-006. Report validation
-
-Корневая секция с ведущей табуляцией считается валидной:
-
-```regex
-^\s*-\s*Конфигурации\.
-```
-
-### AC-007. Build smoke fail
-
-Если build MCP не прошел smoke-test:
-
-```text
-switch запрещен
-production продолжает работать
-last_indexed_commit не обновляется
-```
-
-### AC-008. Switch success
-
-После успешного switch:
-
-```text
-production running
-current содержит новый index
-previous содержит старый index
-last_indexed_commit = target_commit
-```
-
-### AC-009. Rollback
-
-Если production smoke-test после switch упал:
-
-```text
-previous возвращается в current
-production запускается на previous
-last_indexed_commit не обновляется
-notification отправляется
-```
-
-### AC-010. Secrets
-
-Логи не содержат секретов.
-
----
-
-## 28. Что строго запрещено
-
-```text
-1. Вносить изменения в Git repo.
-2. Коммитить/пушить из updater-а.
-3. Генерировать Report.txt внутри updater-а.
-4. Парсить XML 1С внутри updater-а.
-5. Останавливать production до успешного build smoke-test.
-6. Запускать production с RESET_DATABASE=true.
-7. Хранить LICENSE_KEY или webhook URL в project.json.
-8. Писать секреты в лог.
-9. Смешивать src/cf и src/cfe в одной папке code.
-10. Считать docker logs гарантией завершения индексации.
-```
-
----
-
-## 29. Минимальный результат MVP
-
-После реализации MVP должно быть возможно выполнить:
-
-```powershell
-powershell.exe -ExecutionPolicy Bypass `
-  -File E:\mcp-1c\tools\mcp-project-updater\update-mcp-project.ps1 `
-  -Config E:\mcp-1c\projects\orders.json
-```
-
-И получить:
-
-```text
-1. Git repo обновлен или определен текущий HEAD.
-2. Если commit новый или --force:
-   - создан staging/build;
-   - создан Report.txt;
-   - создан code/cf и/или code/cfe;
-   - построен chroma/build;
-   - build MCP прошел проверки;
-   - production MCP переключен;
-   - last_indexed_commit обновлен.
-3. Если commit не изменился:
-   - ничего не тронуто.
-4. При ошибке:
-   - production MCP не потерян;
-   - rollback выполнен, если ошибка после switch;
-   - есть лог и notification.
-```
+- `/app/chroma_db` как default CodeMetadata container mount target;
+- `/app/zvec_db` только как explicit `mcp.indexContainerPath` override для образа с таким контрактом;
+- `chroma_root` как legacy compatibility alias;
+- `requireChromaNotEmpty` как legacy compatibility alias;
+- `ChromaDB -> zvec` как исторический migration context;
+- старый `<paths.root>/chroma/current` только как backup/manual recovery source.

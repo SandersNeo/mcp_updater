@@ -4,6 +4,7 @@ param(
     [string]$Config,
 
     [switch]$Force,
+    [switch]$StorageMigration,
     [switch]$NoGitPull,
     [switch]$Rollback,
     [switch]$Verbose,
@@ -17,6 +18,10 @@ $arguments = @($pythonScript, "--config", $Config)
 
 if ($Force) {
     $arguments += "--force"
+}
+
+if ($StorageMigration) {
+    $arguments += "--storage-migration"
 }
 
 if ($NoGitPull) {
@@ -37,4 +42,3 @@ if ($DryRun) {
 
 & python @arguments
 exit $LASTEXITCODE
-

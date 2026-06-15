@@ -7,7 +7,7 @@ from pathlib import Path
 def write_runtime_files(project_root: Path, *, parser_path: Path, tool_path: Path) -> None:
     project_root.mkdir(parents=True, exist_ok=True)
     (project_root.parent / "secrets.global.json").write_text(
-        json.dumps({"ONERPA_LICENSE_KEY": "license-value", "OPENROUTER_API_KEY": "openrouter-value"}),
+        json.dumps({"ONERPA_LICENSE_KEY": "license-value"}),
         encoding="utf-8",
     )
     (project_root / "secrets.local.json").write_text(
@@ -35,13 +35,9 @@ def _settings_payload(parser_path: Path, tool_path: Path) -> dict:
             "allowedExitCodes": [0, 1],
         },
         "mcp": {
-            "env": {
-                "OPENAI_API_BASE": "https://openrouter.ai/api/v1",
-                "OPENAI_MODEL": "qwen/qwen3-embedding-8b",
-            },
+            "env": {},
             "secretEnv": {
                 "LICENSE_KEY": "ONERPA_LICENSE_KEY",
-                "OPENAI_API_KEY": "OPENROUTER_API_KEY",
             },
         },
         "smokeTest": {
@@ -57,7 +53,7 @@ def _settings_payload(parser_path: Path, tool_path: Path) -> dict:
                 "timeoutSeconds": 60,
                 "checkIntervalSeconds": 5,
                 "acceptableHttpStatusCodes": [200, 400, 404, 405],
-                "requireChromaNotEmpty": True,
+                "requireIndexStorageNotEmpty": True,
                 "logTailLines": 100,
                 "logErrorPatterns": ["Traceback", "Unhandled exception", "CRITICAL"],
                 "logReadyPatterns": ["Started"],

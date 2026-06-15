@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import platform
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ ALLOWED_MCP_IMAGES = {
     "comol/1c_code_metadata_mcp:light",
     "comol/1c_code_metadata_mcp:latest",
 }
+DEFAULT_INDEX_CONTAINER_PATH = "/app/chroma_db"
 
 
 def _expect_mapping(value: Any, field_name: str) -> dict[str, Any]:
@@ -123,6 +125,7 @@ class MCPInstanceConfig:
 class MCPConfig:
     image: str
     container_port: int
+    index_container_path: str
     production: MCPInstanceConfig
     build: MCPInstanceConfig
     index_code: bool
@@ -141,9 +144,13 @@ class MCPConfig:
 class PathsConfig:
     root: Path
     staging_root: Path
-    chroma_root: Path
+    index_storage_root: Path
     state_root: Path
     logs_root: Path
+
+    @property
+    def chroma_root(self) -> Path:
+        return self.index_storage_root
 
 
 @dataclass(slots=True)
@@ -159,7 +166,7 @@ class InfrastructureSmokeConfig:
     timeout_seconds: int
     check_interval_seconds: int
     acceptable_http_status_codes: list[int]
-    require_chroma_not_empty: bool
+    require_index_storage_not_empty: bool
     log_tail_lines: int
     log_error_patterns: list[str]
     log_ready_patterns: list[str] = field(default_factory=list)
@@ -266,6 +273,7 @@ def _parse_project_config(raw: dict[str, Any], config_path: Path) -> ProjectConf
     rollback_raw = _expect_mapping(raw.get("rollback", {}), "rollback")
     main_config_required = _expect_bool(sources_raw.get("mainConfigRequired"), "sources.mainConfigRequired")
     extension_required = _expect_bool(sources_raw.get("extensionRequired"), "sources.extensionRequired")
+    index_storage_root = _expect_path_string(mcp_raw.get("indexStorageRoot"), "mcp.indexStorageRoot")
 
     tool_timeout_seconds = _expect_int(tool_raw.get("timeoutSeconds"), "settings.smokeTest.toolSmokeTest.timeoutSeconds")
     if "url" in tool_raw:
@@ -280,9 +288,6 @@ def _parse_project_config(raw: dict[str, Any], config_path: Path) -> ProjectConf
     secrets_values = load_secrets(secrets_config)
     global_mcp_env = {str(key): str(value) for key, value in get_mapping(settings_config, ("mcp", "env")).items()}
     project_mcp_env_raw = _expect_mapping(mcp_raw.get("env", {}), "mcp.env")
-    for global_only_key in ("OPENAI_API_BASE", "OPENAI_MODEL"):
-        if global_only_key in project_mcp_env_raw:
-            raise ConfigValidationError(f"Field 'mcp.env.{global_only_key}' belongs in settings.global.json.")
     project_mcp_env = {str(key): str(value) for key, value in project_mcp_env_raw.items()}
     default_mcp_env = {"METADATA_PATH": "/app/metadata", "CODE_PATH": "/app/code"}
     global_mcp_secret_env = {
@@ -329,6 +334,11 @@ def _parse_project_config(raw: dict[str, Any], config_path: Path) -> ProjectConf
         mcp=MCPConfig(
             image=_expect_string(mcp_raw.get("image"), "mcp.image"),
             container_port=_expect_int(mcp_raw.get("containerPort"), "mcp.containerPort"),
+            index_container_path=_expect_optional_string(
+                mcp_raw.get("indexContainerPath"),
+                "mcp.indexContainerPath",
+            )
+            or DEFAULT_INDEX_CONTAINER_PATH,
             production=MCPInstanceConfig(
                 container_name=_expect_string(production_raw.get("containerName"), "mcp.production.containerName"),
                 host_port=_expect_int(production_raw.get("hostPort"), "mcp.production.hostPort"),
@@ -353,7 +363,7 @@ def _parse_project_config(raw: dict[str, Any], config_path: Path) -> ProjectConf
         paths=PathsConfig(
             root=paths_root,
             staging_root=paths_root / "staging",
-            chroma_root=paths_root / "chroma",
+            index_storage_root=index_storage_root,
             state_root=paths_root / "state",
             logs_root=paths_root / "logs",
         ),
@@ -373,10 +383,7 @@ def _parse_project_config(raw: dict[str, Any], config_path: Path) -> ProjectConf
                     infrastructure_raw.get("acceptableHttpStatusCodes"),
                     "settings.smokeTest.infrastructure.acceptableHttpStatusCodes",
                 ),
-                require_chroma_not_empty=_expect_bool(
-                    infrastructure_raw.get("requireChromaNotEmpty"),
-                    "settings.smokeTest.infrastructure.requireChromaNotEmpty",
-                ),
+                require_index_storage_not_empty=_expect_infrastructure_storage_required(infrastructure_raw),
                 log_tail_lines=_expect_int(infrastructure_raw.get("logTailLines"), "settings.smokeTest.infrastructure.logTailLines"),
                 log_error_patterns=[str(item) for item in infrastructure_raw.get("logErrorPatterns", [])],
                 log_ready_patterns=[str(item) for item in infrastructure_raw.get("logReadyPatterns", [])],
@@ -458,6 +465,8 @@ def _validate_project_config(config: ProjectConfig) -> None:
     if not str(config.paths.root):
         raise ConfigValidationError("Field 'paths.root' must not be empty.")
 
+    _validate_index_storage_root(config.paths.index_storage_root)
+
     if config.sources.main_config_required and not config.sources.main_config_path:
         raise ConfigValidationError("Field 'sources.mainConfigPath' must be set when sources.mainConfigRequired=true.")
 
@@ -469,6 +478,8 @@ def _validate_project_config(config: ProjectConfig) -> None:
 
     if config.mcp.container_port <= 0:
         raise ConfigValidationError("Field 'mcp.containerPort' must be greater than 0.")
+
+    _validate_index_container_path(config.mcp.index_container_path)
 
     if config.mcp.image not in ALLOWED_MCP_IMAGES:
         allowed = ", ".join(sorted(ALLOWED_MCP_IMAGES))
@@ -510,3 +521,50 @@ def _validate_project_config(config: ProjectConfig) -> None:
     for secret_name in config.mcp.secret_env.values():
         if secret_name not in config.secrets_values:
             raise ConfigValidationError(f"MCP secret is missing from secrets files: {secret_name}")
+
+
+def _expect_infrastructure_storage_required(infrastructure_raw: dict[str, Any]) -> bool:
+    if "requireIndexStorageNotEmpty" in infrastructure_raw:
+        return _expect_bool(
+            infrastructure_raw.get("requireIndexStorageNotEmpty"),
+            "settings.smokeTest.infrastructure.requireIndexStorageNotEmpty",
+        )
+    if "requireChromaNotEmpty" in infrastructure_raw:
+        return _expect_bool(
+            infrastructure_raw.get("requireChromaNotEmpty"),
+            "settings.smokeTest.infrastructure.requireChromaNotEmpty",
+        )
+    raise ConfigValidationError("Field 'settings.smokeTest.infrastructure.requireIndexStorageNotEmpty' must be a boolean.")
+
+
+def _validate_index_storage_root(path: Path) -> None:
+    value = str(path)
+    if platform.system().lower() == "windows":
+        if not _is_wsl_unc_path(value):
+            raise ConfigValidationError(
+                "Field 'mcp.indexStorageRoot' must be a WSL-mounted UNC path on Windows "
+                "(\\\\wsl.localhost\\... or \\\\wsl$\\...)."
+            )
+    elif not path.is_absolute():
+        raise ConfigValidationError("Field 'mcp.indexStorageRoot' must be an absolute path.")
+
+    if not _is_path_or_parent_accessible(path):
+        raise ConfigValidationError(
+            f"Field 'mcp.indexStorageRoot' or its parent path must be accessible: {path}"
+        )
+
+
+def _validate_index_container_path(value: str) -> None:
+    if not value.startswith("/") or "\\" in value or ":" in value:
+        raise ConfigValidationError(
+            "Field 'mcp.indexContainerPath' must be an absolute Unix-style container path."
+        )
+
+
+def _is_path_or_parent_accessible(path: Path) -> bool:
+    return path.exists() or path.parent.exists()
+
+
+def _is_wsl_unc_path(value: str) -> bool:
+    normalized = value.replace("/", "\\").lower()
+    return normalized.startswith("\\\\wsl.localhost\\") or normalized.startswith("\\\\wsl$\\")

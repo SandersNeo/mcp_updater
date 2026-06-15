@@ -38,6 +38,7 @@ def _write_config(tmp_path: Path) -> Path:
         },
         "mcp": {
             "image": "comol/1c_code_metadata_mcp:light",
+            "indexStorageRoot": str(tmp_path / "index-storage"),
             "containerPort": 8000,
             "production": {"containerName": "prod", "hostPort": 8100, "url": "http://localhost:8100/mcp"},
             "build": {"containerName": "build", "hostPort": 18100, "url": "http://localhost:18100/mcp"},
@@ -64,7 +65,7 @@ def _write_config(tmp_path: Path) -> Path:
                 "checkIntervalSeconds": 5,
                 "httpReadyUrl": "http://localhost:18100/mcp",
                 "acceptableHttpStatusCodes": [200],
-                "requireChromaNotEmpty": True,
+                "requireIndexStorageNotEmpty": True,
                 "logTailLines": 100,
                 "logErrorPatterns": ["Traceback"],
                 "logReadyPatterns": ["Started"],
@@ -105,8 +106,8 @@ def test_perform_switch_first_time_updates_current(tmp_path: Path, monkeypatch) 
     state_store = StateStore(config.paths.state_root)
     (config.paths.staging_root / "build" / "metadata").mkdir(parents=True)
     (config.paths.staging_root / "build" / "metadata" / "Report.txt").write_text("x", encoding="utf-8")
-    (config.paths.chroma_root / "build").mkdir(parents=True)
-    (config.paths.chroma_root / "build" / "db.bin").write_text("x", encoding="utf-8")
+    (config.paths.index_storage_root / "build").mkdir(parents=True)
+    (config.paths.index_storage_root / "build" / "db.bin").write_text("x", encoding="utf-8")
 
     monkeypatch.setattr("mcp_project_updater.switcher.start_production_container", lambda *args, **kwargs: None)
     monkeypatch.setattr("mcp_project_updater.switcher.write_container_logs", lambda *args, **kwargs: None)
@@ -121,7 +122,7 @@ def test_perform_switch_first_time_updates_current(tmp_path: Path, monkeypatch) 
     )
 
     assert (config.paths.staging_root / "current").exists()
-    assert (config.paths.chroma_root / "current").exists()
+    assert (config.paths.index_storage_root / "current").exists()
     assert state_store.read_current_commit() == "abc123"
     assert state_store.read_last_indexed_commit() == "abc123"
     assert state_store.read_previous_commit() is None
@@ -137,10 +138,10 @@ def test_perform_switch_moves_old_current_to_previous(tmp_path: Path, monkeypatc
     (config.paths.staging_root / "build").mkdir(parents=True)
     (config.paths.staging_root / "build" / "new.txt").write_text("new", encoding="utf-8")
 
-    (config.paths.chroma_root / "current").mkdir(parents=True)
-    (config.paths.chroma_root / "current" / "old.bin").write_text("old", encoding="utf-8")
-    (config.paths.chroma_root / "build").mkdir(parents=True)
-    (config.paths.chroma_root / "build" / "new.bin").write_text("new", encoding="utf-8")
+    (config.paths.index_storage_root / "current").mkdir(parents=True)
+    (config.paths.index_storage_root / "current" / "old.bin").write_text("old", encoding="utf-8")
+    (config.paths.index_storage_root / "build").mkdir(parents=True)
+    (config.paths.index_storage_root / "build" / "new.bin").write_text("new", encoding="utf-8")
 
     monkeypatch.setattr("mcp_project_updater.switcher.start_production_container", lambda *args, **kwargs: None)
     monkeypatch.setattr("mcp_project_updater.switcher.write_container_logs", lambda *args, **kwargs: None)
@@ -164,7 +165,7 @@ def test_perform_switch_failed_production_smoke_triggers_rollback(tmp_path: Path
     config = load_project_config(_write_config(tmp_path))
     state_store = StateStore(config.paths.state_root)
     (config.paths.staging_root / "build").mkdir(parents=True)
-    (config.paths.chroma_root / "build").mkdir(parents=True)
+    (config.paths.index_storage_root / "build").mkdir(parents=True)
     called = {"rollback": False}
 
     monkeypatch.setattr("mcp_project_updater.switcher.start_production_container", lambda *args, **kwargs: None)
@@ -184,13 +185,56 @@ def test_perform_switch_failed_production_smoke_triggers_rollback(tmp_path: Path
     assert called["rollback"] is True
 
 
+def test_perform_switch_storage_migration_smoke_failure_stops_container_without_rollback(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = load_project_config(_write_config(tmp_path))
+    state_store = StateStore(config.paths.state_root)
+    (config.paths.staging_root / "build").mkdir(parents=True)
+    (config.paths.index_storage_root / "build").mkdir(parents=True)
+    calls = {"rollback": False, "stopped": False, "logs": False}
+
+    def runner(command, cwd):
+        if command == ["docker", "stop", config.mcp.production.container_name]:
+            calls["stopped"] = True
+            return DockerCommandResult(0, "", "")
+        if command[:3] == ["docker", "rm", "-f"]:
+            return DockerCommandResult(1, "", "No such container")
+        return DockerCommandResult(0, "", "")
+
+    monkeypatch.setattr("mcp_project_updater.switcher.start_production_container", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "mcp_project_updater.switcher.write_container_logs",
+        lambda *args, **kwargs: calls.__setitem__("logs", True),
+    )
+
+    with pytest.raises(ProductionSmokeTestFailed) as exc:
+        perform_switch(
+            config,
+            state_store,
+            "abc123",
+            tmp_path / "production.log",
+            docker_runner=runner,
+            production_smoke_runner=lambda current_config: (_ for _ in ()).throw(Exception("boom")),
+            rollback_runner=lambda *args, **kwargs: calls.__setitem__("rollback", True),
+            storage_migration=True,
+        )
+
+    assert exc.value.rollback_attempted is False
+    assert "recover manually" in str(exc.value)
+    assert calls == {"rollback": False, "stopped": True, "logs": True}
+    assert state_store.read_current_commit() is None
+    assert state_store.read_last_indexed_commit() is None
+
+
 def test_perform_switch_continues_when_build_container_cannot_be_removed(tmp_path: Path, monkeypatch, caplog) -> None:
     config = load_project_config(_write_config(tmp_path))
     state_store = StateStore(config.paths.state_root)
     (config.paths.staging_root / "build" / "metadata").mkdir(parents=True)
     (config.paths.staging_root / "build" / "metadata" / "Report.txt").write_text("x", encoding="utf-8")
-    (config.paths.chroma_root / "build").mkdir(parents=True)
-    (config.paths.chroma_root / "build" / "db.bin").write_text("x", encoding="utf-8")
+    (config.paths.index_storage_root / "build").mkdir(parents=True)
+    (config.paths.index_storage_root / "build" / "db.bin").write_text("x", encoding="utf-8")
 
     def runner(command, cwd):
         if command == ["docker", "rm", "-f", config.mcp.production.container_name]:

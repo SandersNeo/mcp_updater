@@ -8,7 +8,7 @@ from typing import Callable
 
 from .config import ProjectConfig
 from .constants import ExitCode
-from .docker_ops import DockerCommandRunner, remove_container, write_container_logs
+from .docker_ops import DockerCommandRunner, remove_container, stop_container, write_container_logs
 from .errors import UpdaterError
 from .mcp_container import start_production_container
 from .smoke_infrastructure import InfrastructureSmokeContext, InfrastructureSmokeResult, run_infrastructure_smoke_test
@@ -17,8 +17,9 @@ from .state import StateStore
 
 
 class ProductionSmokeTestFailed(UpdaterError):
-    def __init__(self, message: str = "Production smoke-test failed.") -> None:
+    def __init__(self, message: str = "Production smoke-test failed.", *, rollback_attempted: bool = True) -> None:
         super().__init__(message, ExitCode.PRODUCTION_SMOKE_FAILED)
+        self.rollback_attempted = rollback_attempted
 
 
 class ProductionSwitchError(UpdaterError):
@@ -53,7 +54,7 @@ def run_production_smoke_test(
             container_name=config.mcp.production.container_name,
             host_port=config.mcp.production.host_port,
             url=config.mcp.production.url,
-            chroma_path=config.paths.chroma_root / "current",
+            index_storage_path=config.paths.index_storage_root / "current",
         ),
         runner=docker_runner,
     )
@@ -79,17 +80,18 @@ def perform_switch(
     docker_runner: DockerCommandRunner,
     production_smoke_runner: Callable[[ProjectConfig], ProductionSmokeTestResult] | None = None,
     rollback_runner: Callable[..., None] | None = None,
+    storage_migration: bool = False,
 ) -> SwitchResult:
     staging_root = config.paths.staging_root
-    chroma_root = config.paths.chroma_root
+    index_storage_root = config.paths.index_storage_root
     build_staging = staging_root / "build"
     current_staging = staging_root / "current"
     previous_staging = staging_root / "previous"
-    build_chroma = chroma_root / "build"
-    current_chroma = chroma_root / "current"
-    previous_chroma = chroma_root / "previous"
+    build_index_storage = index_storage_root / "build"
+    current_index_storage = index_storage_root / "current"
+    previous_index_storage = index_storage_root / "previous"
 
-    if not build_staging.exists() or not build_chroma.exists():
+    if not build_staging.exists() or not build_index_storage.exists():
         raise ProductionSwitchError("Build artifacts are missing; cannot switch to current.")
 
     old_current_commit = state_store.read_current_commit()
@@ -98,15 +100,15 @@ def perform_switch(
     _remove_build_container_best_effort(config, docker_runner)
 
     _remove_if_exists(previous_staging)
-    _remove_if_exists(previous_chroma)
+    _remove_if_exists(previous_index_storage)
 
     if current_staging.exists():
         shutil.move(str(current_staging), str(previous_staging))
-    if current_chroma.exists():
-        shutil.move(str(current_chroma), str(previous_chroma))
+    if current_index_storage.exists():
+        shutil.move(str(current_index_storage), str(previous_index_storage))
 
     shutil.move(str(build_staging), str(current_staging))
-    shutil.move(str(build_chroma), str(current_chroma))
+    shutil.move(str(build_index_storage), str(current_index_storage))
 
     start_production_container(config.mcp, config.paths, runner=docker_runner)
 
@@ -115,6 +117,25 @@ def perform_switch(
         smoke_runner(config)
     except Exception as exc:
         write_container_logs(config.mcp.production.container_name, production_log_path, runner=docker_runner)
+        if storage_migration:
+            try:
+                stop_container(
+                    config.mcp.production.container_name,
+                    runner=docker_runner,
+                    error_code=ExitCode.PRODUCTION_SMOKE_FAILED,
+                )
+            except UpdaterError as stop_exc:
+                logger.warning(
+                    "Failed to stop production container '%s' after storage migration smoke failure: %s",
+                    config.mcp.production.container_name,
+                    stop_exc,
+                )
+            raise ProductionSmokeTestFailed(
+                "Storage migration production smoke-test failed. "
+                "Automatic rollback is disabled for storage migration; recover manually from the old deployment backup. "
+                f"Original error: {exc}",
+                rollback_attempted=False,
+            ) from exc
         if rollback_runner is None:
             from .rollback import perform_automatic_rollback
 
@@ -126,7 +147,7 @@ def perform_switch(
             docker_runner=docker_runner,
             production_smoke_runner=smoke_runner,
         )
-        raise ProductionSmokeTestFailed(str(exc)) from exc
+        raise ProductionSmokeTestFailed(str(exc), rollback_attempted=True) from exc
 
     write_container_logs(config.mcp.production.container_name, production_log_path, runner=docker_runner)
 

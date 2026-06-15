@@ -24,7 +24,7 @@ def _write_config(tmp_path: Path, payload: dict, *, create_repo: bool = True) ->
     project_secrets = root_path / "secrets.local.json"
     project_secrets.parent.mkdir(parents=True, exist_ok=True)
     global_secrets.write_text(
-        json.dumps({"ONERPA_LICENSE_KEY": "license-value", "OPENROUTER_API_KEY": "openrouter-value"}),
+        json.dumps({"ONERPA_LICENSE_KEY": "license-value"}),
         encoding="utf-8",
     )
     project_secrets.write_text(
@@ -38,16 +38,13 @@ def _write_config(tmp_path: Path, payload: dict, *, create_repo: bool = True) ->
     payload["smokeTest"]["toolSmokeTest"]["toolPath"] = str(tool_path)
     payload["smokeTest"]["toolSmokeTest"].pop("url", None)
     payload["paths"]["root"] = str(root_path)
+    payload["mcp"]["indexStorageRoot"] = payload["mcp"].get("indexStorageRoot") or str(root_path / "index-storage")
     settings_payload = {
         "parser": payload["parser"],
         "mcp": {
-            "env": {
-                "OPENAI_API_BASE": "https://openrouter.ai/api/v1",
-                "OPENAI_MODEL": "qwen/qwen3-embedding-8b",
-            },
+            "env": {},
             "secretEnv": {
                 "LICENSE_KEY": "ONERPA_LICENSE_KEY",
-                "OPENAI_API_KEY": "OPENROUTER_API_KEY",
             },
         },
         "smokeTest": payload["smokeTest"],
@@ -94,6 +91,7 @@ def _base_payload() -> dict:
         },
         "mcp": {
             "image": "comol/1c_code_metadata_mcp:light",
+            "indexStorageRoot": "",
             "containerPort": 8000,
             "production": {
                 "containerName": "mcp-orders",
@@ -131,7 +129,7 @@ def _base_payload() -> dict:
                 "timeoutSeconds": 60,
                 "checkIntervalSeconds": 5,
                 "acceptableHttpStatusCodes": [200, 400, 404, 405],
-                "requireChromaNotEmpty": True,
+                "requireIndexStorageNotEmpty": True,
                 "logTailLines": 200,
                 "logErrorPatterns": ["Traceback"],
                 "logReadyPatterns": ["Started"],
@@ -185,16 +183,206 @@ def test_load_project_config_defaults_and_validation(tmp_path: Path) -> None:
     assert config.smoke_test.tool_smoke_test.attempt_timeout_seconds == 60
     assert config.smoke_test.tool_smoke_test.retry_interval_seconds == 15
     assert config.repo.path == config.paths.root / "repo"
+    assert config.mcp.index_container_path == "/app/chroma_db"
     assert config.paths.staging_root == config.paths.root / "staging"
-    assert config.paths.chroma_root == config.paths.root / "chroma"
+    assert config.paths.index_storage_root == config.paths.root / "index-storage"
+    assert config.paths.chroma_root == config.paths.index_storage_root
+    assert config.paths.chroma_root != config.paths.root / "chroma"
     assert config.paths.state_root == config.paths.root / "state"
     assert config.paths.logs_root == config.paths.root / "logs"
     assert config.secrets.global_file == config.paths.root.parent / "secrets.global.json"
     assert config.secrets.project_file == config.paths.root / "secrets.local.json"
     assert config.settings.global_file == config.paths.root.parent / "settings.global.json"
+    assert "OPENAI_API_BASE" not in config.mcp.env
+    assert "OPENAI_MODEL" not in config.mcp.env
+    assert "OPENAI_API_KEY" not in config.mcp.secret_env
+    assert config.smoke_test.infrastructure.require_index_storage_not_empty is True
+
+
+def test_openai_env_is_optional_without_project_mapping(tmp_path: Path) -> None:
+    payload = _base_payload()
+    config_path = _write_config(tmp_path, payload)
+
+    config = load_project_config(config_path)
+
+    assert "OPENAI_API_BASE" not in config.mcp.env
+    assert "OPENAI_MODEL" not in config.mcp.env
+
+
+def test_project_level_openai_env_is_supported(tmp_path: Path) -> None:
+    payload = _base_payload()
+    payload["mcp"]["env"] = {
+        "OPENAI_API_BASE": "https://openrouter.ai/api/v1",
+        "OPENAI_MODEL": "qwen/qwen3-embedding-8b",
+    }
+    config_path = _write_config(tmp_path, payload)
+
+    config = load_project_config(config_path)
+
     assert config.mcp.env["OPENAI_API_BASE"] == "https://openrouter.ai/api/v1"
     assert config.mcp.env["OPENAI_MODEL"] == "qwen/qwen3-embedding-8b"
+
+
+def test_openai_api_key_is_optional_without_project_mapping(tmp_path: Path) -> None:
+    payload = _base_payload()
+    config_path = _write_config(tmp_path, payload)
+    global_secrets_path = tmp_path / "secrets.global.json"
+    global_secrets = json.loads(global_secrets_path.read_text(encoding="utf-8"))
+    global_secrets.pop("OPENROUTER_API_KEY", None)
+    global_secrets_path.write_text(json.dumps(global_secrets), encoding="utf-8")
+
+    config = load_project_config(config_path)
+
+    assert "OPENAI_API_KEY" not in config.mcp.secret_env
+    assert "OPENROUTER_API_KEY" not in config.secrets_values
+
+
+def test_project_level_openai_api_key_mapping_is_supported(tmp_path: Path) -> None:
+    payload = _base_payload()
+    payload["mcp"]["secretEnv"] = {"OPENAI_API_KEY": "OPENROUTER_API_KEY"}
+    config_path = _write_config(tmp_path, payload)
+    project_secrets_path = tmp_path / "runtime" / "secrets.local.json"
+    project_secrets = json.loads(project_secrets_path.read_text(encoding="utf-8"))
+    project_secrets["OPENROUTER_API_KEY"] = "project-openrouter-key"
+    project_secrets_path.write_text(json.dumps(project_secrets), encoding="utf-8")
+
+    config = load_project_config(config_path)
+
     assert config.mcp.secret_env["OPENAI_API_KEY"] == "OPENROUTER_API_KEY"
+    assert config.secrets_values["OPENROUTER_API_KEY"] == "project-openrouter-key"
+
+
+def test_project_level_openai_api_key_mapping_requires_secret(tmp_path: Path) -> None:
+    payload = _base_payload()
+    payload["mcp"]["secretEnv"] = {"OPENAI_API_KEY": "OPENROUTER_API_KEY"}
+    config_path = _write_config(tmp_path, payload)
+
+    with pytest.raises(ConfigValidationError, match="OPENROUTER_API_KEY"):
+        load_project_config(config_path)
+
+
+def test_missing_index_storage_root_is_rejected(tmp_path: Path) -> None:
+    payload = _base_payload()
+    del payload["mcp"]["indexStorageRoot"]
+    config_path = _write_config(tmp_path, payload)
+    written = json.loads(config_path.read_text(encoding="utf-8"))
+    del written["mcp"]["indexStorageRoot"]
+    config_path.write_text(json.dumps(written), encoding="utf-8")
+
+    with pytest.raises(ConfigValidationError, match="mcp.indexStorageRoot"):
+        load_project_config(config_path)
+
+
+def test_windows_index_storage_root_must_be_wsl_unc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = _base_payload()
+    payload["mcp"]["indexStorageRoot"] = "C:/mcp/index-storage"
+    config_path = _write_config(tmp_path, payload)
+    monkeypatch.setattr("mcp_project_updater.config.platform.system", lambda: "Windows")
+
+    with pytest.raises(ConfigValidationError, match="WSL-mounted UNC path"):
+        load_project_config(config_path)
+
+
+def test_windows_wsl_index_storage_root_is_allowed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = _base_payload()
+    payload["mcp"]["indexStorageRoot"] = r"\\wsl.localhost\Ubuntu\mcp\orders"
+    config_path = _write_config(tmp_path, payload)
+    monkeypatch.setattr("mcp_project_updater.config.platform.system", lambda: "Windows")
+    monkeypatch.setattr("mcp_project_updater.config._is_path_or_parent_accessible", lambda path: True)
+
+    config = load_project_config(config_path)
+
+    assert str(config.paths.index_storage_root) == r"\\wsl.localhost\Ubuntu\mcp\orders"
+
+
+def test_linux_index_storage_root_must_be_absolute(tmp_path: Path) -> None:
+    payload = _base_payload()
+    payload["mcp"]["indexStorageRoot"] = "relative/index-storage"
+    config_path = _write_config(tmp_path, payload)
+
+    with pytest.raises(ConfigValidationError, match="absolute path"):
+        load_project_config(config_path)
+
+
+def test_linux_absolute_index_storage_root_is_allowed(tmp_path: Path) -> None:
+    payload = _base_payload()
+    payload["mcp"]["indexStorageRoot"] = str(tmp_path / "linux-index-storage")
+    config_path = _write_config(tmp_path, payload)
+
+    config = load_project_config(config_path)
+
+    assert config.paths.index_storage_root == tmp_path / "linux-index-storage"
+
+
+def test_index_container_path_override_is_supported(tmp_path: Path) -> None:
+    payload = _base_payload()
+    payload["mcp"]["indexContainerPath"] = "/app/zvec_db"
+    config_path = _write_config(tmp_path, payload)
+
+    config = load_project_config(config_path)
+
+    assert config.mcp.index_container_path == "/app/zvec_db"
+
+
+def test_explicit_default_index_container_path_is_supported(tmp_path: Path) -> None:
+    payload = _base_payload()
+    payload["mcp"]["indexContainerPath"] = "/app/chroma_db"
+    config_path = _write_config(tmp_path, payload)
+
+    config = load_project_config(config_path)
+
+    assert config.mcp.index_container_path == "/app/chroma_db"
+
+
+@pytest.mark.parametrize("index_container_path", ["app/chroma_db", r"C:\app\chroma_db", "/app\\chroma_db"])
+def test_invalid_index_container_path_is_rejected(tmp_path: Path, index_container_path: str) -> None:
+    payload = _base_payload()
+    payload["mcp"]["indexContainerPath"] = index_container_path
+    config_path = _write_config(tmp_path, payload)
+
+    with pytest.raises(ConfigValidationError, match="mcp.indexContainerPath"):
+        load_project_config(config_path)
+
+
+def test_legacy_require_chroma_not_empty_alias_is_supported(tmp_path: Path) -> None:
+    payload = _base_payload()
+    infrastructure = payload["smokeTest"]["infrastructure"]
+    del infrastructure["requireIndexStorageNotEmpty"]
+    infrastructure["requireChromaNotEmpty"] = False
+    config_path = _write_config(tmp_path, payload)
+
+    config = load_project_config(config_path)
+
+    assert config.smoke_test.infrastructure.require_index_storage_not_empty is False
+
+
+def test_missing_index_storage_smoke_setting_uses_new_error_name(tmp_path: Path) -> None:
+    payload = _base_payload()
+    infrastructure = payload["smokeTest"]["infrastructure"]
+    del infrastructure["requireIndexStorageNotEmpty"]
+    config_path = _write_config(tmp_path, payload)
+
+    with pytest.raises(ConfigValidationError, match="requireIndexStorageNotEmpty"):
+        load_project_config(config_path)
+
+
+def test_stable_latest_image_is_allowed(tmp_path: Path) -> None:
+    payload = _base_payload()
+    payload["mcp"]["image"] = "comol/1c_code_metadata_mcp:latest"
+    config_path = _write_config(tmp_path, payload)
+
+    config = load_project_config(config_path)
+
+    assert config.mcp.image == "comol/1c_code_metadata_mcp:latest"
+
+
+def test_beta_image_is_rejected(tmp_path: Path) -> None:
+    payload = _base_payload()
+    payload["mcp"]["image"] = "comol/1c_code_metadata_mcp:latest-beta"
+    config_path = _write_config(tmp_path, payload)
+
+    with pytest.raises(ConfigValidationError, match="mcp.image"):
+        load_project_config(config_path)
 
 
 def test_profile_defaults_to_dev(tmp_path: Path) -> None:

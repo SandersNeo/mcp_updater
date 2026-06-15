@@ -21,7 +21,7 @@ def _smoke_config() -> InfrastructureSmokeConfig:
         timeout_seconds=2,
         check_interval_seconds=0,
         acceptable_http_status_codes=[200, 400, 404, 405],
-        require_chroma_not_empty=True,
+        require_index_storage_not_empty=True,
         log_tail_lines=50,
         log_error_patterns=["Traceback", "Exception"],
         log_ready_patterns=["Started"],
@@ -29,9 +29,9 @@ def _smoke_config() -> InfrastructureSmokeConfig:
 
 
 def test_run_infrastructure_smoke_test_success(tmp_path: Path) -> None:
-    chroma = tmp_path / "chroma"
-    chroma.mkdir()
-    (chroma / "file.bin").write_text("x", encoding="utf-8")
+    index_storage = tmp_path / "index-storage"
+    index_storage.mkdir()
+    (index_storage / "file.bin").write_text("x", encoding="utf-8")
     commands = []
 
     def runner(command, cwd):
@@ -46,7 +46,7 @@ def test_run_infrastructure_smoke_test_success(tmp_path: Path) -> None:
             container_name="build",
             host_port=18100,
             url="http://localhost:18100/mcp",
-            chroma_path=chroma,
+            index_storage_path=index_storage,
         ),
         runner=runner,
         http_status_getter=lambda url: 404,
@@ -58,9 +58,9 @@ def test_run_infrastructure_smoke_test_success(tmp_path: Path) -> None:
 
 
 def test_run_infrastructure_smoke_test_detects_error_pattern(tmp_path: Path) -> None:
-    chroma = tmp_path / "chroma"
-    chroma.mkdir()
-    (chroma / "file.bin").write_text("x", encoding="utf-8")
+    index_storage = tmp_path / "index-storage"
+    index_storage.mkdir()
+    (index_storage / "file.bin").write_text("x", encoding="utf-8")
 
     def runner(command, cwd):
         if command[:2] == ["docker", "inspect"]:
@@ -74,7 +74,7 @@ def test_run_infrastructure_smoke_test_detects_error_pattern(tmp_path: Path) -> 
                 container_name="build",
                 host_port=18100,
                 url="http://localhost:18100/mcp",
-                chroma_path=chroma,
+                index_storage_path=index_storage,
             ),
             runner=runner,
             http_status_getter=lambda url: 200,
@@ -84,9 +84,9 @@ def test_run_infrastructure_smoke_test_detects_error_pattern(tmp_path: Path) -> 
 
 
 def test_run_infrastructure_smoke_test_handles_remote_disconnect_as_retryable_failure(tmp_path: Path) -> None:
-    chroma = tmp_path / "chroma"
-    chroma.mkdir()
-    (chroma / "file.bin").write_text("x", encoding="utf-8")
+    index_storage = tmp_path / "index-storage"
+    index_storage.mkdir()
+    (index_storage / "file.bin").write_text("x", encoding="utf-8")
 
     def runner(command, cwd):
         if command[:2] == ["docker", "inspect"]:
@@ -102,7 +102,7 @@ def test_run_infrastructure_smoke_test_handles_remote_disconnect_as_retryable_fa
                 container_name="build",
                 host_port=18100,
                 url="http://localhost:18100/mcp",
-                chroma_path=chroma,
+                index_storage_path=index_storage,
             ),
             runner=runner,
             http_status_getter=lambda url: (_ for _ in ()).throw(http.client.RemoteDisconnected("Remote end closed connection without response")),
@@ -115,9 +115,9 @@ def test_run_infrastructure_smoke_test_handles_remote_disconnect_as_retryable_fa
 
 
 def test_run_infrastructure_smoke_test_waits_for_ready_log_pattern(tmp_path: Path) -> None:
-    chroma = tmp_path / "chroma"
-    chroma.mkdir()
-    (chroma / "file.bin").write_text("x", encoding="utf-8")
+    index_storage = tmp_path / "index-storage"
+    index_storage.mkdir()
+    (index_storage / "file.bin").write_text("x", encoding="utf-8")
 
     log_responses = ["still starting", "Started successfully"]
     log_index = {"value": 0}
@@ -137,7 +137,7 @@ def test_run_infrastructure_smoke_test_waits_for_ready_log_pattern(tmp_path: Pat
             container_name="build",
             host_port=18100,
             url="http://localhost:18100/mcp",
-            chroma_path=chroma,
+            index_storage_path=index_storage,
         ),
         runner=runner,
         http_status_getter=lambda url: 405,

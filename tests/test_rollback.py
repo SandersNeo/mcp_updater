@@ -38,6 +38,7 @@ def _write_config(tmp_path: Path) -> Path:
         },
         "mcp": {
             "image": "comol/1c_code_metadata_mcp:light",
+            "indexStorageRoot": str(tmp_path / "index-storage"),
             "containerPort": 8000,
             "production": {"containerName": "prod", "hostPort": 8100, "url": "http://localhost:8100/mcp"},
             "build": {"containerName": "build", "hostPort": 18100, "url": "http://localhost:18100/mcp"},
@@ -64,7 +65,7 @@ def _write_config(tmp_path: Path) -> Path:
                 "checkIntervalSeconds": 5,
                 "httpReadyUrl": "http://localhost:18100/mcp",
                 "acceptableHttpStatusCodes": [200],
-                "requireChromaNotEmpty": True,
+                "requireIndexStorageNotEmpty": True,
                 "logTailLines": 100,
                 "logErrorPatterns": ["Traceback"],
                 "logReadyPatterns": ["Started"],
@@ -107,10 +108,10 @@ def test_automatic_rollback_preserves_failed_index(tmp_path: Path, monkeypatch) 
     (config.paths.staging_root / "current" / "bad.txt").write_text("bad", encoding="utf-8")
     (config.paths.staging_root / "previous").mkdir(parents=True)
     (config.paths.staging_root / "previous" / "good.txt").write_text("good", encoding="utf-8")
-    (config.paths.chroma_root / "current").mkdir(parents=True)
-    (config.paths.chroma_root / "current" / "bad.bin").write_text("bad", encoding="utf-8")
-    (config.paths.chroma_root / "previous").mkdir(parents=True)
-    (config.paths.chroma_root / "previous" / "good.bin").write_text("good", encoding="utf-8")
+    (config.paths.index_storage_root / "current").mkdir(parents=True)
+    (config.paths.index_storage_root / "current" / "bad.bin").write_text("bad", encoding="utf-8")
+    (config.paths.index_storage_root / "previous").mkdir(parents=True)
+    (config.paths.index_storage_root / "previous" / "good.bin").write_text("good", encoding="utf-8")
 
     monkeypatch.setattr("mcp_project_updater.rollback.start_production_container", lambda *args, **kwargs: None)
     monkeypatch.setattr("mcp_project_updater.rollback.write_container_logs", lambda *args, **kwargs: None)
@@ -138,10 +139,10 @@ def test_manual_rollback_swaps_current_and_previous(tmp_path: Path, monkeypatch)
     (config.paths.staging_root / "current" / "current.txt").write_text("current", encoding="utf-8")
     (config.paths.staging_root / "previous").mkdir(parents=True)
     (config.paths.staging_root / "previous" / "previous.txt").write_text("previous", encoding="utf-8")
-    (config.paths.chroma_root / "current").mkdir(parents=True)
-    (config.paths.chroma_root / "current" / "current.bin").write_text("current", encoding="utf-8")
-    (config.paths.chroma_root / "previous").mkdir(parents=True)
-    (config.paths.chroma_root / "previous" / "previous.bin").write_text("previous", encoding="utf-8")
+    (config.paths.index_storage_root / "current").mkdir(parents=True)
+    (config.paths.index_storage_root / "current" / "current.bin").write_text("current", encoding="utf-8")
+    (config.paths.index_storage_root / "previous").mkdir(parents=True)
+    (config.paths.index_storage_root / "previous" / "previous.bin").write_text("previous", encoding="utf-8")
 
     monkeypatch.setattr("mcp_project_updater.rollback.start_production_container", lambda *args, **kwargs: None)
     monkeypatch.setattr("mcp_project_updater.rollback.write_container_logs", lambda *args, **kwargs: None)
@@ -165,8 +166,8 @@ def test_manual_rollback_requires_state_commits(tmp_path: Path, monkeypatch) -> 
     state_store = StateStore(config.paths.state_root)
     (config.paths.staging_root / "current").mkdir(parents=True)
     (config.paths.staging_root / "previous").mkdir(parents=True)
-    (config.paths.chroma_root / "current").mkdir(parents=True)
-    (config.paths.chroma_root / "previous").mkdir(parents=True)
+    (config.paths.index_storage_root / "current").mkdir(parents=True)
+    (config.paths.index_storage_root / "previous").mkdir(parents=True)
 
     monkeypatch.setattr("mcp_project_updater.rollback.start_production_container", lambda *args, **kwargs: None)
     monkeypatch.setattr("mcp_project_updater.rollback.write_container_logs", lambda *args, **kwargs: None)

@@ -15,6 +15,7 @@ from mcp_project_updater.mcp_container import (
     format_container_command_for_log,
     prepare_index_storage_build,
     start_build_container,
+    start_production_container,
 )
 from mcp_project_updater.staging import prepare_build_staging
 from tests.config_helpers import strip_global_project_blocks, write_runtime_files
@@ -166,6 +167,7 @@ def test_start_build_container_runs_remove_and_run(tmp_path: Path, monkeypatch) 
     assert any(part == "RESET_DATABASE=true" for part in calls[1])
     assert any(part == "INDEX_METADATA=true" for part in calls[1])
     assert any(part == "INDEX_CODE=true" for part in calls[1])
+    assert "REINDEX_INTERVAL_SEC=0" not in calls[1]
     assert f"{config.paths.index_storage_root / 'build'}:/app/chroma_db" in calls[1]
     assert "OPENAI_API_BASE=https://openrouter.ai/api/v1" not in calls[1]
     assert "OPENAI_MODEL=qwen/qwen3-embedding-8b" not in calls[1]
@@ -203,7 +205,13 @@ def test_start_build_container_can_disable_metadata_and_seed_from_current(tmp_pa
 
 
 def test_build_production_container_command_uses_restart_policy(tmp_path: Path) -> None:
-    config = load_project_config(_write_config(tmp_path))
+    config_path = _write_config(tmp_path)
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    payload["mcp"]["indexMetadata"] = True
+    payload["mcp"]["indexCode"] = True
+    payload["mcp"]["indexHelp"] = True
+    config_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    config = load_project_config(config_path)
 
     command = build_production_container_command(config.mcp, config.paths)
 
@@ -211,7 +219,36 @@ def test_build_production_container_command_uses_restart_policy(tmp_path: Path) 
     assert "--restart" in command
     restart_index = command.index("--restart")
     assert command[restart_index + 1] == "unless-stopped"
+    assert "RESET_DATABASE=false" in command
+    assert "INDEX_METADATA=false" in command
+    assert "INDEX_CODE=false" in command
+    assert "INDEX_HELP=false" in command
+    assert "REINDEX_INTERVAL_SEC=0" in command
+    assert "INDEX_METADATA=true" not in command
+    assert "INDEX_CODE=true" not in command
+    assert "INDEX_HELP=true" not in command
     assert f"{config.paths.index_storage_root / 'current'}:/app/chroma_db" in command
+
+
+def test_start_production_container_logs_disabled_indexing_flags(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    config_path = _write_config(tmp_path)
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    payload["mcp"]["indexMetadata"] = True
+    payload["mcp"]["indexCode"] = True
+    payload["mcp"]["indexHelp"] = True
+    config_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    config = load_project_config(config_path)
+
+    def runner(command, cwd):
+        return DockerCommandResult(0, "container-id\n", "")
+
+    with caplog.at_level("INFO"):
+        start_production_container(config.mcp, config.paths, runner=runner)
+
+    assert "index_metadata=False" in caplog.text
+    assert "index_code=False" in caplog.text
+    assert "index_help=False" in caplog.text
+    assert "reindex_interval_sec=0" in caplog.text
 
 
 def test_build_container_command_uses_configured_index_container_path(tmp_path: Path) -> None:

@@ -89,6 +89,7 @@ def build_runtime_container_command(
     index_code: bool,
     index_help: bool,
     restart_policy: str | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> list[str]:
     resolved_secret_env = resolve_secret_environment(mcp_config.secret_env, mcp_config.secrets)
     container_env = build_container_environment(
@@ -103,6 +104,8 @@ def build_runtime_container_command(
             "INDEX_HELP": _bool_to_env(index_help),
         },
     )
+    if extra_env:
+        container_env.update(extra_env)
 
     command: list[str] = [
         "docker",
@@ -173,10 +176,11 @@ def build_production_container_command(
         code_path=paths_config.staging_root / "current" / "code",
         index_storage_path=paths_config.index_storage_root / "current",
         reset_database=False,
-        index_metadata=mcp_config.index_metadata,
-        index_code=mcp_config.index_code,
-        index_help=mcp_config.index_help,
+        index_metadata=False,
+        index_code=False,
+        index_help=False,
         restart_policy="unless-stopped",
+        extra_env={"REINDEX_INTERVAL_SEC": "0"},
     )
 
 
@@ -188,12 +192,13 @@ def start_production_container(
 ) -> ContainerStartResult:
     command = build_production_container_command(mcp_config, paths_config)
     logger.info(
-        "Starting production container '%s' with flags: reset_database=%s index_metadata=%s index_code=%s index_help=%s",
+        "Starting production container '%s' with flags: reset_database=%s index_metadata=%s index_code=%s index_help=%s reindex_interval_sec=%s",
         mcp_config.production.container_name,
         False,
-        mcp_config.index_metadata,
-        mcp_config.index_code,
-        mcp_config.index_help,
+        False,
+        False,
+        False,
+        0,
     )
     logger.info("Production container command: %s", format_container_command_for_log(command))
     result = run_docker_command(

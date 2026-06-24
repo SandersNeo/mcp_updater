@@ -154,6 +154,26 @@ Container mount target берется из `mcp.indexContainerPath`, default `/a
 -v <index_storage_path>:<mcp.indexContainerPath>
 ```
 
+Build container command использует configured build indexing flags:
+
+```text
+INDEX_METADATA=<mcp.indexMetadata>
+INDEX_CODE=<mcp.indexCode>
+INDEX_HELP=<mcp.indexHelp>
+```
+
+Production container command hardcodes indexing disabled:
+
+```text
+RESET_DATABASE=false
+INDEX_METADATA=false
+INDEX_CODE=false
+INDEX_HELP=false
+REINDEX_INTERVAL_SEC=0
+```
+
+Это относится к обычному switch, storage migration switch и rollback production start. Production container должен только обслуживать готовый `index_storage_root/current`. `REINDEX_INTERVAL_SEC=0` отключает periodic scheduler внутри MCP image; `BACKGROUND_INDEXING=false` не используется, потому что в текущем образе это включает legacy startup indexing path.
+
 Updater не добавляет automatic `docker pull`. Обновление image является manual prerequisite.
 
 ## 6. Build Storage Preparation
@@ -259,7 +279,7 @@ Production smoke-test не должен запускаться до switch, по
 - best-effort удаляет build container;
 - перемещает `current` в `previous`;
 - перемещает `build` в `current`;
-- стартует production container;
+- стартует production container с disabled `INDEX_*` и `REINDEX_INTERVAL_SEC=0`;
 - выполняет production smoke-test;
 - записывает state только после успешного smoke.
 

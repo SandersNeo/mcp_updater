@@ -253,9 +253,11 @@ Migration workflow:
 - build smoke-tests выполняются до удаления старого production container;
 - после успешных build smoke-tests старый production container удаляется;
 - `build` переключается в `current`;
-- запускается новый zvec-backed production container;
+- запускается новый zvec-backed production container с `RESET_DATABASE=false`, `INDEX_METADATA=false`, `INDEX_CODE=false`, `INDEX_HELP=false` и `REINDEX_INTERVAL_SEC=0`;
 - production smoke-test выполняется только после запуска нового production container;
 - state обновляется только после успешного production smoke-test.
+
+Production container не строит и не обновляет индекс. Индексирование выполняется только в build container; production только обслуживает готовый `mcp.indexStorageRoot/current`. Updater также передает `REINDEX_INTERVAL_SEC=0`, чтобы periodic reindex scheduler внутри CodeMetadata MCP не запускался в production.
 
 Если production smoke-test падает в `--storage-migration`, updater сохраняет production logs, останавливает неисправный новый production container, не запускает automatic rollback и возвращает ошибку с manual recovery guidance. Восстановление выполняется вручную из backup старого deployment.
 
@@ -264,6 +266,8 @@ Migration workflow:
 Обычный update без `--storage-migration` и без `--force` может seed-ить `mcp.indexStorageRoot/build` из `mcp.indexStorageRoot/current`, если текущий baseline существует. Это ускоряет повторные zvec updates.
 
 `--force` отключает seed/reuse только для текущего configured storage root. Он не является marker-ом ChromaDB -> zvec migration.
+
+После switch production container запускается без indexing flags и с `REINDEX_INTERVAL_SEC=0`, поэтому periodic scan внутри production не должен запускаться updater-ом. Если в production logs снова появляются длительные `Background indexing started`, проверьте, что контейнер был пересоздан новой версией updater-а и в `docker inspect` env содержит `INDEX_METADATA=false`, `INDEX_CODE=false`, `INDEX_HELP=false`, `REINDEX_INTERVAL_SEC=0`.
 
 ## Promote Existing Build
 

@@ -33,7 +33,48 @@ class PathsConfig:
 
 `chroma_root` остается только compatibility alias. Новая логика должна использовать `index_storage_root`.
 
-`mcp.indexStorageRoot` обязателен для каждого project config.
+`paths.root` является optional override. Если он не задан, resolved `paths.root` равен parent directory `project.json`. `settings.global.json` читается из `paths.root.parent`.
+
+`settings.global.json` может содержать `projectDefaults`:
+
+```json
+{
+  "projectDefaults": {
+    "indexStorageRootTemplate": "\\\\wsl.localhost\\Ubuntu\\home\\norkins\\mcp-indexes\\{project}",
+    "productionContainerNameTemplate": "mcp-{project}",
+    "buildContainerNameTemplate": "mcp-{project}-build",
+    "urlScheme": "http",
+    "urlHost": "localhost",
+    "urlPath": "/mcp",
+    "buildHostPortOffset": 10000,
+    "containerPort": 8000
+  }
+}
+```
+
+`mcp.indexStorageRoot` может быть explicit в project config или derived из `settings.projectDefaults.indexStorageRootTemplate`.
+
+`mcp.hostPort` является compact alias для production host port. Resolution order:
+
+1. `mcp.production.hostPort`, если задан.
+2. `mcp.hostPort`, если `mcp.production.hostPort` не задан.
+3. Если оба заданы и отличаются, `ConfigValidationError`.
+
+Если `mcp.build.hostPort` не задан, build port = production host port + `settings.projectDefaults.buildHostPortOffset`.
+
+Если `mcp.production.url` / `mcp.build.url` не заданы, URL строится как `{urlScheme}://{urlHost}:{hostPort}{urlPath}`.
+
+Если `mcp.production.containerName` / `mcp.build.containerName` не заданы, используются templates `mcp-{project}` и `mcp-{project}-build`.
+
+Common MCP flags optional defaults:
+
+- `indexCode=true`
+- `indexMetadata=true`
+- `indexHelp=false`
+- `resetDatabaseOnBuild=true`
+- `resetCache=false`
+- `useSse=false`
+- `useGpu=false`
 
 `MCPConfig` содержит:
 
@@ -47,7 +88,7 @@ index_container_path: str = "/app/chroma_db"
 
 Validation:
 
-- missing `mcp.indexStorageRoot` -> `ConfigValidationError`;
+- missing explicit `mcp.indexStorageRoot` and missing `settings.projectDefaults.indexStorageRootTemplate` -> `ConfigValidationError`;
 - Windows path должен начинаться с `\\wsl.localhost\` или `\\wsl$\`;
 - Linux path должен быть absolute;
 - storage path или parent должен быть доступен до Git/parser/Docker операций;
@@ -266,7 +307,7 @@ Promote выполняет build smoke-tests, затем вызывает общ
 
 Обязательные тестовые области:
 
-- missing `mcp.indexStorageRoot`;
+- missing explicit `mcp.indexStorageRoot` and missing `settings.projectDefaults.indexStorageRootTemplate`;
 - Windows non-WSL path rejected;
 - Windows WSL path accepted;
 - Linux relative path rejected;
@@ -291,7 +332,7 @@ Promote выполняет build smoke-tests, затем вызывает общ
 
 Docs/examples must state:
 
-- `mcp.indexStorageRoot` is required;
+- explicit `mcp.indexStorageRoot` or `settings.projectDefaults.indexStorageRootTemplate` is required;
 - `mcp.indexContainerPath` defaults to `/app/chroma_db` for CodeMetadata;
 - Windows storage root must be WSL-mounted;
 - Linux storage root must be absolute native path;

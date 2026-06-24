@@ -6,6 +6,16 @@
     "buildXmlOverrides": true,
     "allowedExitCodes": [0, 1]
   },
+  "projectDefaults": {
+    "indexStorageRootTemplate": "\\\\wsl.localhost\\Ubuntu\\home\\norkins\\mcp-indexes\\{project}",
+    "productionContainerNameTemplate": "mcp-{project}",
+    "buildContainerNameTemplate": "mcp-{project}-build",
+    "urlScheme": "http",
+    "urlHost": "localhost",
+    "urlPath": "/mcp",
+    "buildHostPortOffset": 10000,
+    "containerPort": 8000
+  },
   "mcp": {
     "secretEnv": {
       "LICENSE_KEY": "ONERPA_LICENSE_KEY"

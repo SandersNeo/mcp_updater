@@ -24,23 +24,50 @@ pip install -e .
 
 ## Конфигурация
 
-`project.json` содержит только проектные настройки: `project`, `repo`, `sources`, `mcp`, `paths.root`, `notifications`, `retention`, `rollback`.
+`project.json` содержит только проектные настройки: `project`, `repo`, `sources`, `mcp`, `notifications`, `retention`, `rollback`.
 
-Общие настройки (`parser`, `smokeTest`, универсальный `mcp.secretEnv`) лежат в `<data-root>/settings.global.json`. Проектные `mcp.env` и `mcp.secretEnv` используются для OpenAI/OpenRouter параметров конкретного проекта. Секреты читаются из `<data-root>/secrets.global.json` и `<paths.root>/secrets.local.json`; проектные secrets перекрывают global secrets с тем же именем.
+Общие настройки (`parser`, `projectDefaults`, `smokeTest`, универсальный `mcp.secretEnv`) лежат в `<data-root>/settings.global.json`. Проектные `mcp.env` и `mcp.secretEnv` используются для OpenAI/OpenRouter параметров конкретного проекта. Секреты читаются из `<data-root>/secrets.global.json` и `<paths.root>/secrets.local.json`; проектные secrets перекрывают global secrets с тем же именем.
 
-Обязательные project-level paths:
+Типовой compact project config хранит только уникальные значения:
 
 ```json
 {
-  "paths": {
-    "root": "C:/mcp-updater-data/orders"
-  },
+  "project": "orders",
   "mcp": {
-    "indexStorageRoot": "\\\\wsl.localhost\\Ubuntu\\mcp-indexes\\orders",
-    "indexContainerPath": "/app/chroma_db"
+    "image": "comol/1c_code_metadata_mcp:latest",
+    "hostPort": 8100
   }
 }
 ```
+
+Если `paths.root` не задан, он равен директории `project.json`. Для `C:\mcp-updater-data\orders\project.json` это `C:\mcp-updater-data\orders`, а global settings читаются из `C:\mcp-updater-data\settings.global.json`.
+
+`settings.global.json` может задавать common defaults:
+
+```json
+{
+  "projectDefaults": {
+    "indexStorageRootTemplate": "\\\\wsl.localhost\\Ubuntu\\home\\norkins\\mcp-indexes\\{project}",
+    "productionContainerNameTemplate": "mcp-{project}",
+    "buildContainerNameTemplate": "mcp-{project}-build",
+    "urlScheme": "http",
+    "urlHost": "localhost",
+    "urlPath": "/mcp",
+    "buildHostPortOffset": 10000,
+    "containerPort": 8000
+  }
+}
+```
+
+Для `project=orders` и `mcp.hostPort=8100` updater выводит:
+
+- production container: `mcp-orders`
+- build container: `mcp-orders-build`
+- production URL: `http://localhost:8100/mcp`
+- build port/URL: `18100`, `http://localhost:18100/mcp`
+- index storage root из `indexStorageRootTemplate`
+
+Все derived values можно задать явно как override: `paths.root`, `mcp.indexStorageRoot`, `mcp.containerPort`, `mcp.production.*`, `mcp.build.*`, `mcp.indexContainerPath`.
 
 `mcp.indexStorageRoot` является единственным root для `build/current/previous/failed` index storage. Updater больше не использует `<paths.root>/chroma` как default.
 
@@ -54,6 +81,8 @@ pip install -e .
 - `mcp.indexContainerPath`, если задан, должен быть absolute Unix-style path внутри контейнера, например `/app/chroma_db`.
 
 Запрещено задавать в `project.json`: `repo.path`, `stagingRoot`, `chromaRoot`, `stateRoot`, `logsRoot`, `secrets.globalFile`, `secrets.projectFile`, `parser`, `smokeTest`, `toolSmokeTest`.
+
+Перед реальным запуском compact config проверяйте через `--dry-run`: updater печатает resolved `paths.root`, `mcp.indexStorageRoot`, container names, host ports и URLs.
 
 `OPENAI_API_BASE`, `OPENAI_MODEL` и `OPENAI_API_KEY` задаются на уровне проекта только если конкретному MCP runtime нужен внешний embedding API:
 
@@ -158,7 +187,7 @@ powershell -ExecutionPolicy Bypass -File .\update-mcp-project.ps1 `
 
 Перед migration:
 
-1. Добавить `mcp.indexStorageRoot` в каждый `project.json`.
+1. Добавить `settings.projectDefaults.indexStorageRootTemplate` или явный `mcp.indexStorageRoot` в проект.
 2. Оставить `mcp.indexContainerPath` отсутствующим или явно задать `/app/chroma_db` для CodeMetadata.
 3. На Windows указать WSL-mounted root.
 4. Сделать backup старого deployment: container metadata, state, `staging/current`, старый `<paths.root>/chroma/current`.

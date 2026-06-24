@@ -555,8 +555,13 @@ def _log_dry_run_summary(
         options.rollback,
         options.verbose,
     )
+    logger.info("Project root: %s", config.paths.root)
     logger.info("Repository path: %s", config.repo.path)
     logger.info("MCP index storage root: %s", config.paths.index_storage_root)
+    logger.info("Production container: %s", config.mcp.production.container_name)
+    logger.info("Build container: %s", config.mcp.build.container_name)
+    logger.info("Production host port: %s", config.mcp.production.host_port)
+    logger.info("Build host port: %s", config.mcp.build.host_port)
     logger.info("Branch: %s", config.repo.branch)
     logger.info("Target commit: %s", target_commit)
     logger.info("Last indexed commit: %s", state_snapshot.last_indexed_commit or "<none>")

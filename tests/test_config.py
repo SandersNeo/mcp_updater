@@ -9,7 +9,15 @@ from mcp_project_updater.config import load_project_config
 from mcp_project_updater.errors import ConfigValidationError
 
 
-def _write_config(tmp_path: Path, payload: dict, *, create_repo: bool = True) -> Path:
+def _write_config(
+    tmp_path: Path,
+    payload: dict,
+    *,
+    create_repo: bool = True,
+    explicit_paths_root: bool = True,
+    explicit_index_storage_root: bool = True,
+    include_project_defaults: bool = False,
+) -> Path:
     root_path = tmp_path / "runtime"
     repo_path = root_path / "repo"
     if create_repo:
@@ -32,13 +40,19 @@ def _write_config(tmp_path: Path, payload: dict, *, create_repo: bool = True) ->
         encoding="utf-8",
     )
 
-    config_path = tmp_path / "project.json"
+    config_path = tmp_path / "project.json" if explicit_paths_root else root_path / "project.json"
 
     payload["parser"]["toolPath"] = str(parser_path)
     payload["smokeTest"]["toolSmokeTest"]["toolPath"] = str(tool_path)
     payload["smokeTest"]["toolSmokeTest"].pop("url", None)
-    payload["paths"]["root"] = str(root_path)
-    payload["mcp"]["indexStorageRoot"] = payload["mcp"].get("indexStorageRoot") or str(root_path / "index-storage")
+    if explicit_paths_root:
+        payload.setdefault("paths", {})["root"] = str(root_path)
+    else:
+        payload.pop("paths", None)
+    if explicit_index_storage_root:
+        payload["mcp"]["indexStorageRoot"] = payload["mcp"].get("indexStorageRoot") or str(root_path / "index-storage")
+    else:
+        payload["mcp"].pop("indexStorageRoot", None)
     settings_payload = {
         "parser": payload["parser"],
         "mcp": {
@@ -49,6 +63,18 @@ def _write_config(tmp_path: Path, payload: dict, *, create_repo: bool = True) ->
         },
         "smokeTest": payload["smokeTest"],
     }
+    if include_project_defaults:
+        (tmp_path / "indexes").mkdir(parents=True, exist_ok=True)
+        settings_payload["projectDefaults"] = {
+            "indexStorageRootTemplate": str(tmp_path / "indexes" / "{project}"),
+            "productionContainerNameTemplate": "mcp-{project}",
+            "buildContainerNameTemplate": "mcp-{project}-build",
+            "urlScheme": "http",
+            "urlHost": "localhost",
+            "urlPath": "/mcp",
+            "buildHostPortOffset": 10000,
+            "containerPort": 8000,
+        }
     (tmp_path / "settings.global.json").write_text(
         json.dumps(settings_payload, ensure_ascii=False),
         encoding="utf-8",
@@ -197,6 +223,144 @@ def test_load_project_config_defaults_and_validation(tmp_path: Path) -> None:
     assert "OPENAI_MODEL" not in config.mcp.env
     assert "OPENAI_API_KEY" not in config.mcp.secret_env
     assert config.smoke_test.infrastructure.require_index_storage_not_empty is True
+
+
+def test_paths_root_defaults_to_project_config_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = _base_payload()
+    config_path = _write_config(
+        tmp_path,
+        payload,
+        explicit_paths_root=False,
+        explicit_index_storage_root=False,
+        include_project_defaults=True,
+    )
+    monkeypatch.setattr("mcp_project_updater.config.platform.system", lambda: "Linux")
+
+    config = load_project_config(config_path)
+
+    assert config.paths.root == config_path.parent
+    assert config.repo.path == config_path.parent / "repo"
+    assert config.settings.global_file == config_path.parent.parent / "settings.global.json"
+    assert config.secrets.project_file == config_path.parent / "secrets.local.json"
+
+
+def test_explicit_paths_root_preserves_settings_location(tmp_path: Path) -> None:
+    payload = _base_payload()
+    config_path = _write_config(tmp_path, payload)
+
+    config = load_project_config(config_path)
+
+    assert config.paths.root == tmp_path / "runtime"
+    assert config.settings.global_file == tmp_path / "settings.global.json"
+
+
+def test_index_storage_root_can_be_derived_from_template(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = _base_payload()
+    config_path = _write_config(
+        tmp_path,
+        payload,
+        explicit_index_storage_root=False,
+        include_project_defaults=True,
+    )
+    monkeypatch.setattr("mcp_project_updater.config.platform.system", lambda: "Linux")
+
+    config = load_project_config(config_path)
+
+    assert config.paths.index_storage_root == tmp_path / "indexes" / "orders"
+
+
+def test_compact_mcp_settings_derive_instances_and_urls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = _base_payload()
+    payload["mcp"] = {
+        "image": "comol/1c_code_metadata_mcp:latest",
+        "hostPort": 8100,
+    }
+    config_path = _write_config(
+        tmp_path,
+        payload,
+        explicit_index_storage_root=False,
+        include_project_defaults=True,
+    )
+    monkeypatch.setattr("mcp_project_updater.config.platform.system", lambda: "Linux")
+
+    config = load_project_config(config_path)
+
+    assert config.mcp.container_port == 8000
+    assert config.mcp.production.container_name == "mcp-orders"
+    assert config.mcp.build.container_name == "mcp-orders-build"
+    assert config.mcp.production.host_port == 8100
+    assert config.mcp.build.host_port == 18100
+    assert config.mcp.production.url == "http://localhost:8100/mcp"
+    assert config.mcp.build.url == "http://localhost:18100/mcp"
+
+
+def test_compact_host_port_conflict_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = _base_payload()
+    payload["mcp"]["hostPort"] = 8100
+    payload["mcp"]["production"]["hostPort"] = 8200
+    config_path = _write_config(tmp_path, payload)
+    monkeypatch.setattr("mcp_project_updater.config.platform.system", lambda: "Linux")
+
+    with pytest.raises(ConfigValidationError, match="mcp.hostPort"):
+        load_project_config(config_path)
+
+
+def test_explicit_instance_settings_override_derived_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = _base_payload()
+    payload["mcp"] = {
+        "image": "comol/1c_code_metadata_mcp:latest",
+        "hostPort": 8100,
+        "production": {
+            "containerName": "custom-prod",
+            "url": "http://prod.example/mcp",
+        },
+        "build": {
+            "containerName": "custom-build",
+            "hostPort": 19000,
+            "url": "http://build.example/mcp",
+        },
+    }
+    config_path = _write_config(
+        tmp_path,
+        payload,
+        explicit_index_storage_root=False,
+        include_project_defaults=True,
+    )
+    monkeypatch.setattr("mcp_project_updater.config.platform.system", lambda: "Linux")
+
+    config = load_project_config(config_path)
+
+    assert config.mcp.production.container_name == "custom-prod"
+    assert config.mcp.production.host_port == 8100
+    assert config.mcp.production.url == "http://prod.example/mcp"
+    assert config.mcp.build.container_name == "custom-build"
+    assert config.mcp.build.host_port == 19000
+    assert config.mcp.build.url == "http://build.example/mcp"
+
+
+def test_common_mcp_flags_default_for_compact_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = _base_payload()
+    payload["mcp"] = {
+        "image": "comol/1c_code_metadata_mcp:latest",
+        "hostPort": 8100,
+    }
+    config_path = _write_config(
+        tmp_path,
+        payload,
+        explicit_index_storage_root=False,
+        include_project_defaults=True,
+    )
+    monkeypatch.setattr("mcp_project_updater.config.platform.system", lambda: "Linux")
+
+    config = load_project_config(config_path)
+
+    assert config.mcp.index_code is True
+    assert config.mcp.index_metadata is True
+    assert config.mcp.index_help is False
+    assert config.mcp.reset_database_on_build is True
+    assert config.mcp.reset_cache is False
+    assert config.mcp.use_sse is False
+    assert config.mcp.use_gpu is False
 
 
 def test_openai_env_is_optional_without_project_mapping(tmp_path: Path) -> None:

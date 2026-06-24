@@ -196,6 +196,16 @@ def test_main_dry_run_returns_success(tmp_path: Path, monkeypatch) -> None:
     result = main(["--config", str(config_path), "--dry-run"])
 
     assert result == ExitCode.SUCCESS
+    log_path = next((tmp_path / "logs").glob("*-update.log"))
+    log_text = log_path.read_text(encoding="utf-8")
+    assert f"Project root: {tmp_path}" in log_text
+    assert f"MCP index storage root: {tmp_path / 'index-storage'}" in log_text
+    assert "Production container: mcp-orders" in log_text
+    assert "Build container: mcp-orders-build" in log_text
+    assert "Production host port: 8100" in log_text
+    assert "Build host port: 18100" in log_text
+    assert "Production URL: http://localhost:8100/mcp" in log_text
+    assert "Build URL: http://localhost:18100/mcp" in log_text
 
 
 def test_main_returns_success_for_mocked_full_workflow(tmp_path: Path, monkeypatch) -> None:

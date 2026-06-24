@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import platform
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -17,12 +18,26 @@ ALLOWED_MCP_IMAGES = {
     "comol/1c_code_metadata_mcp:latest",
 }
 DEFAULT_INDEX_CONTAINER_PATH = "/app/chroma_db"
+DEFAULT_CONTAINER_PORT = 8000
+DEFAULT_BUILD_HOST_PORT_OFFSET = 10000
+DEFAULT_PRODUCTION_CONTAINER_NAME_TEMPLATE = "mcp-{project}"
+DEFAULT_BUILD_CONTAINER_NAME_TEMPLATE = "mcp-{project}-build"
+DEFAULT_URL_SCHEME = "http"
+DEFAULT_URL_HOST = "localhost"
+DEFAULT_URL_PATH = "/mcp"
+DOCKER_CONTAINER_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
 
 
 def _expect_mapping(value: Any, field_name: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ConfigValidationError(f"Field '{field_name}' must be an object.")
     return value
+
+
+def _expect_optional_mapping(value: Any, field_name: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    return _expect_mapping(value, field_name)
 
 
 def _expect_string(value: Any, field_name: str) -> str:
@@ -43,6 +58,12 @@ def _expect_int(value: Any, field_name: str) -> int:
     return value
 
 
+def _expect_optional_int(value: Any, field_name: str) -> int | None:
+    if value is None:
+        return None
+    return _expect_int(value, field_name)
+
+
 def _expect_list_of_ints(value: Any, field_name: str) -> list[int]:
     if not isinstance(value, list) or any(not isinstance(item, int) or isinstance(item, bool) for item in value):
         raise ConfigValidationError(f"Field '{field_name}' must be a list of integers.")
@@ -51,6 +72,12 @@ def _expect_list_of_ints(value: Any, field_name: str) -> list[int]:
 
 def _expect_path_string(value: Any, field_name: str) -> Path:
     return Path(_expect_string(value, field_name))
+
+
+def _expect_optional_path_string(value: Any, field_name: str) -> Path | None:
+    if value is None:
+        return None
+    return _expect_path_string(value, field_name)
 
 
 def _expect_optional_string(value: Any, field_name: str) -> str | None:
@@ -220,6 +247,18 @@ class RollbackConfig:
 
 
 @dataclass(slots=True)
+class ProjectDefaultsConfig:
+    index_storage_root_template: str | None
+    production_container_name_template: str
+    build_container_name_template: str
+    url_scheme: str
+    url_host: str
+    url_path: str
+    build_host_port_offset: int
+    container_port: int
+
+
+@dataclass(slots=True)
 class ProjectConfig:
     project: str
     repo: RepoConfig
@@ -255,15 +294,16 @@ def load_project_config(config_path: str | Path) -> ProjectConfig:
 def _parse_project_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
     repo_raw = _expect_mapping(raw.get("repo"), "repo")
     project_name = _expect_string(raw.get("project"), "project")
-    paths_raw = _expect_mapping(raw.get("paths"), "paths")
-    paths_root = _expect_path_string(paths_raw.get("root"), "paths.root")
+    paths_raw = _expect_optional_mapping(raw.get("paths"), "paths")
+    paths_root = _expect_optional_path_string(paths_raw.get("root"), "paths.root") or config_path.parent
     settings_config = load_global_settings(paths_root.parent / "settings.global.json")
+    project_defaults = _parse_project_defaults(settings_config)
     _reject_project_level_global_blocks(raw)
     sources_raw = _expect_mapping(raw.get("sources"), "sources")
     parser_raw = _expect_settings_mapping(settings_config, ("parser",), "settings.parser")
     mcp_raw = _expect_mapping(raw.get("mcp"), "mcp")
-    production_raw = _expect_mapping(mcp_raw.get("production"), "mcp.production")
-    build_raw = _expect_mapping(mcp_raw.get("build"), "mcp.build")
+    production_raw = _expect_optional_mapping(mcp_raw.get("production"), "mcp.production")
+    build_raw = _expect_optional_mapping(mcp_raw.get("build"), "mcp.build")
     smoke_raw = _expect_settings_mapping(settings_config, ("smokeTest",), "settings.smokeTest")
     report_raw = _expect_mapping(smoke_raw.get("reportValidation"), "settings.smokeTest.reportValidation")
     infrastructure_raw = _expect_mapping(smoke_raw.get("infrastructure"), "settings.smokeTest.infrastructure")
@@ -273,7 +313,35 @@ def _parse_project_config(raw: dict[str, Any], config_path: Path) -> ProjectConf
     rollback_raw = _expect_mapping(raw.get("rollback", {}), "rollback")
     main_config_required = _expect_bool(sources_raw.get("mainConfigRequired"), "sources.mainConfigRequired")
     extension_required = _expect_bool(sources_raw.get("extensionRequired"), "sources.extensionRequired")
-    index_storage_root = _expect_path_string(mcp_raw.get("indexStorageRoot"), "mcp.indexStorageRoot")
+    index_storage_root = _resolve_index_storage_root(mcp_raw, project_defaults, project_name)
+    production_host_port = _resolve_production_host_port(mcp_raw, production_raw)
+    build_host_port = _expect_optional_int(build_raw.get("hostPort"), "mcp.build.hostPort")
+    if build_host_port is None:
+        build_host_port = production_host_port + project_defaults.build_host_port_offset
+    production_container_name = _expect_optional_string(
+        production_raw.get("containerName"),
+        "mcp.production.containerName",
+    ) or _render_project_template(
+        project_defaults.production_container_name_template,
+        project_name,
+        "settings.projectDefaults.productionContainerNameTemplate",
+    )
+    build_container_name = _expect_optional_string(
+        build_raw.get("containerName"),
+        "mcp.build.containerName",
+    ) or _render_project_template(
+        project_defaults.build_container_name_template,
+        project_name,
+        "settings.projectDefaults.buildContainerNameTemplate",
+    )
+    production_url = _expect_optional_string(
+        production_raw.get("url"),
+        "mcp.production.url",
+    ) or _build_default_mcp_url(project_defaults, production_host_port)
+    build_url = _expect_optional_string(
+        build_raw.get("url"),
+        "mcp.build.url",
+    ) or _build_default_mcp_url(project_defaults, build_host_port)
 
     tool_timeout_seconds = _expect_int(tool_raw.get("timeoutSeconds"), "settings.smokeTest.toolSmokeTest.timeoutSeconds")
     if "url" in tool_raw:
@@ -333,29 +401,33 @@ def _parse_project_config(raw: dict[str, Any], config_path: Path) -> ProjectConf
         ),
         mcp=MCPConfig(
             image=_expect_string(mcp_raw.get("image"), "mcp.image"),
-            container_port=_expect_int(mcp_raw.get("containerPort"), "mcp.containerPort"),
+            container_port=_expect_int(mcp_raw.get("containerPort"), "mcp.containerPort")
+            if "containerPort" in mcp_raw
+            else project_defaults.container_port,
             index_container_path=_expect_optional_string(
                 mcp_raw.get("indexContainerPath"),
                 "mcp.indexContainerPath",
             )
             or DEFAULT_INDEX_CONTAINER_PATH,
             production=MCPInstanceConfig(
-                container_name=_expect_string(production_raw.get("containerName"), "mcp.production.containerName"),
-                host_port=_expect_int(production_raw.get("hostPort"), "mcp.production.hostPort"),
-                url=_expect_string(production_raw.get("url"), "mcp.production.url"),
+                container_name=production_container_name,
+                host_port=production_host_port,
+                url=production_url,
             ),
             build=MCPInstanceConfig(
-                container_name=_expect_string(build_raw.get("containerName"), "mcp.build.containerName"),
-                host_port=_expect_int(build_raw.get("hostPort"), "mcp.build.hostPort"),
-                url=_expect_string(build_raw.get("url"), "mcp.build.url"),
+                container_name=build_container_name,
+                host_port=build_host_port,
+                url=build_url,
             ),
-            index_code=_expect_bool(mcp_raw.get("indexCode"), "mcp.indexCode"),
-            index_metadata=_expect_bool(mcp_raw.get("indexMetadata"), "mcp.indexMetadata"),
-            index_help=_expect_bool(mcp_raw.get("indexHelp"), "mcp.indexHelp"),
-            reset_database_on_build=_expect_bool(mcp_raw.get("resetDatabaseOnBuild"), "mcp.resetDatabaseOnBuild"),
-            reset_cache=_expect_bool(mcp_raw.get("resetCache"), "mcp.resetCache"),
-            use_sse=_expect_bool(mcp_raw.get("useSse"), "mcp.useSse"),
-            use_gpu=_expect_bool(mcp_raw.get("useGpu"), "mcp.useGpu"),
+            index_code=_expect_bool(mcp_raw.get("indexCode"), "mcp.indexCode") if "indexCode" in mcp_raw else True,
+            index_metadata=_expect_bool(mcp_raw.get("indexMetadata"), "mcp.indexMetadata") if "indexMetadata" in mcp_raw else True,
+            index_help=_expect_bool(mcp_raw.get("indexHelp"), "mcp.indexHelp") if "indexHelp" in mcp_raw else False,
+            reset_database_on_build=_expect_bool(mcp_raw.get("resetDatabaseOnBuild"), "mcp.resetDatabaseOnBuild")
+            if "resetDatabaseOnBuild" in mcp_raw
+            else True,
+            reset_cache=_expect_bool(mcp_raw.get("resetCache"), "mcp.resetCache") if "resetCache" in mcp_raw else False,
+            use_sse=_expect_bool(mcp_raw.get("useSse"), "mcp.useSse") if "useSse" in mcp_raw else False,
+            use_gpu=_expect_bool(mcp_raw.get("useGpu"), "mcp.useGpu") if "useGpu" in mcp_raw else False,
             env={**default_mcp_env, **global_mcp_env, **project_mcp_env},
             secret_env={**global_mcp_secret_env, **project_mcp_secret_env},
             secrets=secrets_values,
@@ -497,6 +569,9 @@ def _validate_project_config(config: ProjectConfig) -> None:
     if config.mcp.production.container_name == config.mcp.build.container_name:
         raise ConfigValidationError("Production and build container names must be different.")
 
+    _validate_docker_container_name(config.mcp.production.container_name, "mcp.production.containerName")
+    _validate_docker_container_name(config.mcp.build.container_name, "mcp.build.containerName")
+
     if config.smoke_test.profile not in {"dev", "production"}:
         raise ConfigValidationError("Field 'smokeTest.profile' must be either 'dev' or 'production'.")
 
@@ -537,6 +612,98 @@ def _expect_infrastructure_storage_required(infrastructure_raw: dict[str, Any]) 
     raise ConfigValidationError("Field 'settings.smokeTest.infrastructure.requireIndexStorageNotEmpty' must be a boolean.")
 
 
+def _parse_project_defaults(settings: SettingsConfig) -> ProjectDefaultsConfig:
+    defaults_raw = get_mapping(settings, ("projectDefaults",))
+    build_host_port_offset = _expect_optional_int(
+        defaults_raw.get("buildHostPortOffset"),
+        "settings.projectDefaults.buildHostPortOffset",
+    )
+    if build_host_port_offset is None:
+        build_host_port_offset = DEFAULT_BUILD_HOST_PORT_OFFSET
+    if build_host_port_offset <= 0:
+        raise ConfigValidationError("Field 'settings.projectDefaults.buildHostPortOffset' must be greater than 0.")
+
+    container_port = _expect_optional_int(
+        defaults_raw.get("containerPort"),
+        "settings.projectDefaults.containerPort",
+    )
+    if container_port is None:
+        container_port = DEFAULT_CONTAINER_PORT
+    if container_port <= 0:
+        raise ConfigValidationError("Field 'settings.projectDefaults.containerPort' must be greater than 0.")
+
+    url_path = _expect_optional_string(defaults_raw.get("urlPath"), "settings.projectDefaults.urlPath") or DEFAULT_URL_PATH
+    if not url_path.startswith("/"):
+        raise ConfigValidationError("Field 'settings.projectDefaults.urlPath' must start with '/'.")
+
+    return ProjectDefaultsConfig(
+        index_storage_root_template=_expect_optional_string(
+            defaults_raw.get("indexStorageRootTemplate"),
+            "settings.projectDefaults.indexStorageRootTemplate",
+        ),
+        production_container_name_template=_expect_optional_string(
+            defaults_raw.get("productionContainerNameTemplate"),
+            "settings.projectDefaults.productionContainerNameTemplate",
+        )
+        or DEFAULT_PRODUCTION_CONTAINER_NAME_TEMPLATE,
+        build_container_name_template=_expect_optional_string(
+            defaults_raw.get("buildContainerNameTemplate"),
+            "settings.projectDefaults.buildContainerNameTemplate",
+        )
+        or DEFAULT_BUILD_CONTAINER_NAME_TEMPLATE,
+        url_scheme=_expect_optional_string(defaults_raw.get("urlScheme"), "settings.projectDefaults.urlScheme")
+        or DEFAULT_URL_SCHEME,
+        url_host=_expect_optional_string(defaults_raw.get("urlHost"), "settings.projectDefaults.urlHost") or DEFAULT_URL_HOST,
+        url_path=url_path,
+        build_host_port_offset=build_host_port_offset,
+        container_port=container_port,
+    )
+
+
+def _resolve_index_storage_root(
+    mcp_raw: dict[str, Any],
+    project_defaults: ProjectDefaultsConfig,
+    project_name: str,
+) -> Path:
+    explicit_value = _expect_optional_path_string(mcp_raw.get("indexStorageRoot"), "mcp.indexStorageRoot")
+    if explicit_value is not None:
+        return explicit_value
+    if not project_defaults.index_storage_root_template:
+        raise ConfigValidationError(
+            "Field 'mcp.indexStorageRoot' must be set when "
+            "'settings.projectDefaults.indexStorageRootTemplate' is not configured."
+        )
+    return Path(
+        _render_project_template(
+            project_defaults.index_storage_root_template,
+            project_name,
+            "settings.projectDefaults.indexStorageRootTemplate",
+        )
+    )
+
+
+def _resolve_production_host_port(mcp_raw: dict[str, Any], production_raw: dict[str, Any]) -> int:
+    compact_host_port = _expect_optional_int(mcp_raw.get("hostPort"), "mcp.hostPort")
+    production_host_port = _expect_optional_int(production_raw.get("hostPort"), "mcp.production.hostPort")
+    if compact_host_port is not None and production_host_port is not None and compact_host_port != production_host_port:
+        raise ConfigValidationError("Fields 'mcp.hostPort' and 'mcp.production.hostPort' must match when both are set.")
+    resolved = production_host_port if production_host_port is not None else compact_host_port
+    if resolved is None:
+        raise ConfigValidationError("Field 'mcp.hostPort' or 'mcp.production.hostPort' must be set.")
+    return resolved
+
+
+def _render_project_template(template: str, project_name: str, field_name: str) -> str:
+    rendered = template.replace("{project}", project_name)
+    if not rendered.strip():
+        raise ConfigValidationError(f"Field '{field_name}' rendered an empty value.")
+    return rendered
+
+
+def _build_default_mcp_url(project_defaults: ProjectDefaultsConfig, host_port: int) -> str:
+    return f"{project_defaults.url_scheme}://{project_defaults.url_host}:{host_port}{project_defaults.url_path}"
+
+
 def _validate_index_storage_root(path: Path) -> None:
     value = str(path)
     if platform.system().lower() == "windows":
@@ -559,6 +726,11 @@ def _validate_index_container_path(value: str) -> None:
         raise ConfigValidationError(
             "Field 'mcp.indexContainerPath' must be an absolute Unix-style container path."
         )
+
+
+def _validate_docker_container_name(value: str, field_name: str) -> None:
+    if not DOCKER_CONTAINER_NAME_PATTERN.match(value):
+        raise ConfigValidationError(f"Field '{field_name}' must be a valid Docker container name.")
 
 
 def _is_path_or_parent_accessible(path: Path) -> bool:

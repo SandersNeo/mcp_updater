@@ -19,34 +19,8 @@
     "nativeReportPath": null
   },
   "mcp": {
-    "image": "comol/1c_code_metadata_mcp:light",
-    "indexStorageRoot": "\\\\wsl.localhost\\Ubuntu\\mcp-indexes\\orders",
-    "indexContainerPath": "/app/chroma_db",
-    "containerPort": 8000,
-    "production": {
-      "containerName": "mcp-orders",
-      "hostPort": 8100,
-      "url": "http://localhost:8100/mcp"
-    },
-    "build": {
-      "containerName": "mcp-orders-build",
-      "hostPort": 18100,
-      "url": "http://localhost:18100/mcp"
-    },
-    "indexCode": true,
-    "indexMetadata": true,
-    "indexHelp": false,
-    "resetDatabaseOnBuild": true,
-    "resetCache": false,
-    "useSse": false,
-    "useGpu": false,
-    "env": {
-      "OPENAI_API_BASE": "https://openrouter.ai/api/v1",
-      "OPENAI_MODEL": "qwen/qwen3-embedding-8b"
-    }
-  },
-  "paths": {
-    "root": "C:/mcp-updater-data/orders"
+    "image": "comol/1c_code_metadata_mcp:latest",
+    "hostPort": 8100
   },
   "notifications": {
     "enabled": true,

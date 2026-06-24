@@ -181,6 +181,52 @@ powershell -ExecutionPolicy Bypass -File .\update-mcp-project.ps1 `
   -Verbose
 ```
 
+## Windows Task Scheduler
+
+Для регулярного запуска используйте PowerShell wrapper `update-mcp-project.ps1`.
+
+Action:
+
+- Program/script:
+
+```text
+powershell.exe
+```
+
+- Arguments:
+
+```text
+-NoProfile -ExecutionPolicy Bypass -File "C:\Work\MCP updater\mcp-project-updater\update-mcp-project.ps1" -Config "C:\mcp-updater-data\orders\project.json" -Verbose
+```
+
+- Start in:
+
+```text
+C:\Work\MCP updater\mcp-project-updater
+```
+
+Для другого проекта меняйте только `-Config`, например:
+
+```text
+-Config "C:\mcp-updater-data\monitoring\project.json"
+```
+
+Пример через `schtasks`:
+
+```powershell
+schtasks /Create /TN "MCP Updater Orders" /SC DAILY /ST 03:00 /RL HIGHEST /F /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\Work\MCP updater\mcp-project-updater\update-mcp-project.ps1\" -Config \"C:\mcp-updater-data\orders\project.json\" -Verbose"
+```
+
+Важные настройки Task Scheduler:
+
+- `Run only when user is logged on` - используйте, если Docker Desktop запущен как пользовательское приложение.
+- `Run with highest privileges` - рекомендуется включить.
+- User задачи должен иметь доступ к Git, Docker Desktop, WSL UNC path и secrets files.
+- В `Conditions` снимите `Start the task only if the computer is on AC power`, если это сервер или рабочая машина, где запуск не должен зависеть от питания.
+- В `Settings` задайте `Stop the task if it runs longer than`, например 12-24 часа для больших конфигураций.
+
+Scheduled run выполняет полный update workflow: Git prepare, build, smoke-tests, production switch и production smoke-test. Отдельного режима "только подготовить build без switch" сейчас нет.
+
 ## zvec Migration
 
 Новый CodeMetadata MCP использует zvec внутри контейнера. Updater не конвертирует старую ChromaDB database и не seed-ит zvec build из старого `<paths.root>/chroma/current`.

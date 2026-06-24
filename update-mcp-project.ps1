@@ -7,7 +7,6 @@ param(
     [switch]$StorageMigration,
     [switch]$NoGitPull,
     [switch]$Rollback,
-    [switch]$Verbose,
     [switch]$DryRun
 )
 
@@ -32,7 +31,7 @@ if ($Rollback) {
     $arguments += "--rollback"
 }
 
-if ($Verbose) {
+if ($PSBoundParameters.ContainsKey("Verbose")) {
     $arguments += "--verbose"
 }
 

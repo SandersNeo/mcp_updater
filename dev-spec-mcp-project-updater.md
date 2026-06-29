@@ -207,9 +207,11 @@ def prepare_index_storage_build(index_storage_root: Path, *, seed_source: Path |
 
 Поведение:
 
-- удалить существующий `build`;
+- удалить существующий `build` через общий guarded cleanup внутри `index_storage_root`;
 - если `seed_source` задан и существует, скопировать его в `build`;
 - иначе создать пустой `build`.
+
+Cleanup `index_storage_root/build` для WSL UNC paths (`\\wsl.localhost\<distro>\...` и `\\wsl$\<distro>\...`) должен выполняться через `wsl.exe -d <distro> -- rm -rf -- <linux-path>`, а не через Windows `shutil.rmtree()`. Ошибки cleanup должны превращаться в `UpdaterError` с `ExitCode.BUILD_CONTAINER_FAILED`, чтобы CLI возвращал code `13` без raw traceback.
 
 Legacy `prepare_chroma_build` может остаться alias-ом на время совместимости.
 
@@ -323,7 +325,7 @@ Production smoke-test не должен запускаться до switch, по
 - выполняет production smoke-test;
 - записывает state только после успешного smoke.
 
-Cleanup старого `index_storage_root/previous` для WSL UNC paths (`\\wsl.localhost\<distro>\...` и `\\wsl$\<distro>\...`) должен выполняться через `wsl.exe -d <distro> -- rm -rf -- <linux-path>`, а не через Windows `shutil.rmtree()`. Recursive cleanup должен отказываться удалять target, если target равен allowed root или находится вне allowed root. Ошибки cleanup должны превращаться в `ProductionSwitchError`, чтобы CLI возвращал exit code `14` без raw traceback.
+Cleanup старого `index_storage_root/previous` использует тот же общий helper, что и build storage cleanup. Recursive cleanup должен отказываться удалять target, если target равен allowed root или находится вне allowed root. Ошибки cleanup должны превращаться в `ProductionSwitchError`, чтобы CLI возвращал exit code `14` без raw traceback.
 
 При обычном production smoke failure:
 

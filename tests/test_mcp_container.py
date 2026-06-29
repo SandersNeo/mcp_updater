@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from mcp_project_updater.config import load_project_config
 from mcp_project_updater.constants import ExitCode
 from mcp_project_updater.docker_ops import DockerCommandResult
+from mcp_project_updater.errors import UpdaterError
 from mcp_project_updater.mcp_container import (
     MissingSecretEnvError,
     build_build_container_command,
@@ -127,6 +129,45 @@ def test_prepare_index_storage_build_can_seed_from_current(tmp_path: Path) -> No
     prepared = prepare_index_storage_build(tmp_path / "index-storage", seed_source=current_dir)
 
     assert (prepared / "db.bin").read_text(encoding="utf-8") == "current"
+
+
+def test_prepare_index_storage_build_uses_wsl_native_delete_for_wsl_unc_path(monkeypatch) -> None:
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("mcp_project_updater.filesystem_cleanup.subprocess.run", runner)
+    monkeypatch.setattr("pathlib.Path.exists", lambda path: str(path).endswith("\\current"))
+    monkeypatch.setattr("shutil.copytree", lambda source, target: None)
+
+    prepared = prepare_index_storage_build(
+        Path(r"\\wsl.localhost\Ubuntu\home\norkins\mcp-indexes\esb"),
+        seed_source=Path(r"\\wsl.localhost\Ubuntu\home\norkins\mcp-indexes\esb\current"),
+    )
+
+    assert prepared == Path(r"\\wsl.localhost\Ubuntu\home\norkins\mcp-indexes\esb\build")
+    assert calls == [
+        (
+            ["wsl.exe", "-d", "Ubuntu", "--", "rm", "-rf", "--", "/home/norkins/mcp-indexes/esb/build"],
+            {"capture_output": True, "text": True, "check": False},
+        )
+    ]
+
+
+def test_prepare_index_storage_build_wraps_cleanup_failure(monkeypatch) -> None:
+    def runner(command, **kwargs):
+        return subprocess.CompletedProcess(command, 1, "", "permission denied")
+
+    monkeypatch.setattr("mcp_project_updater.filesystem_cleanup.subprocess.run", runner)
+
+    with pytest.raises(UpdaterError) as exc:
+        prepare_index_storage_build(Path(r"\\wsl.localhost\Ubuntu\home\norkins\mcp-indexes\esb"))
+
+    assert exc.value.exit_code == ExitCode.BUILD_CONTAINER_FAILED
+    assert "build index storage" in str(exc.value)
+    assert "permission denied" in str(exc.value)
 
 
 def test_build_build_container_command_requires_secret_env(tmp_path: Path, monkeypatch) -> None:

@@ -334,7 +334,7 @@ powershell -ExecutionPolicy Bypass -File .\promote-existing-build.ps1 `
 
 Promote проверяет build infrastructure/tool smoke до production switch.
 
-Если update упал на switch cleanup старого `mcp.indexStorageRoot\previous`, например с `WinError 145` на WSL UNC path, `current` обычно еще не перемещен, а `build` artifacts остаются на месте. Так как build container к этому моменту уже может быть удален switch workflow, самый надежный recovery path после обновления updater-а - повторить исходный update/repair command. Для metadata repair это снова выполнит metadata-only repair без пересборки code index.
+Updater удаляет старые `mcp.indexStorageRoot\build` и `mcp.indexStorageRoot\previous` через WSL-native cleanup, если storage задан как `\\wsl.localhost\...` или `\\wsl$\...`. Если старый updater упал с `WinError 145` на cleanup `build` или `previous`, после обновления повторите исходный update/repair command. Для metadata repair это снова выполнит metadata-only repair без пересборки code index.
 
 ## Rollback
 

@@ -307,7 +307,7 @@ def test_remove_if_exists_wraps_windows_delete_os_error(tmp_path: Path, monkeypa
     def _raise_os_error(path):
         raise OSError("folder is not empty")
 
-    monkeypatch.setattr("mcp_project_updater.switcher.shutil.rmtree", _raise_os_error)
+    monkeypatch.setattr("mcp_project_updater.filesystem_cleanup.shutil.rmtree", _raise_os_error)
 
     with pytest.raises(ProductionSwitchError) as exc:
         _remove_if_exists(previous, allowed_root=tmp_path)

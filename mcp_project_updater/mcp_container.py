@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import shlex
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,6 +9,7 @@ from .config import MCPConfig, MCPInstanceConfig, PathsConfig
 from .constants import ExitCode
 from .docker_ops import DockerCommandResult, DockerCommandRunner, remove_container, run_docker_command
 from .errors import UpdaterError
+from .filesystem_cleanup import FilesystemCleanupError, remove_path_if_exists
 from .staging import BuildPaths
 
 logger = logging.getLogger(__name__)
@@ -34,9 +34,17 @@ class ContainerStartResult:
 
 def prepare_index_storage_build(index_storage_root: Path, *, seed_source: Path | None = None) -> Path:
     build_path = index_storage_root / "build"
-    if build_path.exists():
-        shutil.rmtree(build_path)
+    try:
+        remove_path_if_exists(
+            build_path,
+            allowed_root=index_storage_root,
+            description="build index storage",
+        )
+    except FilesystemCleanupError as exc:
+        raise UpdaterError(str(exc), ExitCode.BUILD_CONTAINER_FAILED) from exc
     if seed_source is not None and seed_source.exists():
+        import shutil
+
         shutil.copytree(seed_source, build_path)
     else:
         build_path.mkdir(parents=True, exist_ok=True)

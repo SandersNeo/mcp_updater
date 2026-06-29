@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import logging
 import shutil
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable
 
 from .config import ProjectConfig
 from .constants import ExitCode
 from .docker_ops import DockerCommandRunner, remove_container, stop_container, write_container_logs
 from .errors import UpdaterError
+from .filesystem_cleanup import FilesystemCleanupError, remove_path_if_exists
 from .mcp_container import start_production_container
 from .smoke_infrastructure import InfrastructureSmokeContext, InfrastructureSmokeResult, run_infrastructure_smoke_test
 from .smoke_tool import ToolSmokeRunResult, default_process_runner as default_tool_smoke_runner, run_tool_smoke_test
@@ -38,12 +38,6 @@ class ProductionSmokeTestResult:
 class SwitchResult:
     target_commit: str
     production_log_path: Path
-
-
-@dataclass(frozen=True, slots=True)
-class _WslUncPath:
-    distro: str
-    linux_path: str
 
 
 logger = logging.getLogger(__name__)
@@ -171,79 +165,21 @@ def _remove_if_exists(
     path: Path,
     *,
     allowed_root: Path,
-    process_runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    process_runner=None,
 ) -> None:
-    _assert_cleanup_target_inside_root(path, allowed_root=allowed_root)
-    wsl_path = _parse_wsl_unc_path(path)
-    if wsl_path is not None:
-        _remove_wsl_unc_path(path, wsl_path, process_runner=process_runner)
-        return
-
     try:
-        if path.is_dir():
-            shutil.rmtree(path)
-        elif path.exists():
-            path.unlink()
-    except OSError as exc:
-        raise ProductionSwitchError(f"Failed to remove switch artifact '{path}': {exc}") from exc
-
-
-def _assert_cleanup_target_inside_root(path: Path, *, allowed_root: Path) -> None:
-    path_text = _normalize_path_for_guard(path)
-    root_text = _normalize_path_for_guard(allowed_root)
-    if path_text == root_text:
-        raise ProductionSwitchError(f"Refusing to remove cleanup root itself: {path}")
-    if not path_text.startswith(f"{root_text}\\"):
-        raise ProductionSwitchError(f"Refusing to remove path outside cleanup root: {path}")
-
-
-def _normalize_path_for_guard(path: Path) -> str:
-    return str(path).replace("/", "\\").rstrip("\\").casefold()
-
-
-def _parse_wsl_unc_path(path: Path) -> _WslUncPath | None:
-    path_text = str(path).replace("/", "\\")
-    for prefix in ("\\\\wsl.localhost\\", "\\\\wsl$\\"):
-        if path_text.casefold().startswith(prefix.casefold()):
-            rest = path_text[len(prefix) :].strip("\\")
-            parts = [part for part in rest.split("\\") if part]
-            if len(parts) < 2:
-                raise ProductionSwitchError(f"Invalid WSL UNC cleanup path: {path}")
-            return _WslUncPath(distro=parts[0], linux_path="/" + "/".join(parts[1:]))
-    return None
-
-
-def _remove_wsl_unc_path(
-    original_path: Path,
-    wsl_path: _WslUncPath,
-    *,
-    process_runner: Callable[..., subprocess.CompletedProcess[str]],
-) -> None:
-    command: Sequence[str] = (
-        "wsl.exe",
-        "-d",
-        wsl_path.distro,
-        "--",
-        "rm",
-        "-rf",
-        "--",
-        wsl_path.linux_path,
-    )
-    try:
-        result = process_runner(
-            list(command),
-            capture_output=True,
-            text=True,
-            check=False,
+        kwargs = {
+            "allowed_root": allowed_root,
+            "description": "switch artifact",
+        }
+        if process_runner is not None:
+            kwargs["process_runner"] = process_runner
+        remove_path_if_exists(
+            path,
+            **kwargs,
         )
-    except OSError as exc:
-        raise ProductionSwitchError(f"Failed to run WSL cleanup for '{original_path}': {exc}") from exc
-    if result.returncode != 0:
-        details = (result.stderr or result.stdout or "").strip()
-        message = f"Failed to remove WSL switch artifact '{original_path}' with exit code {result.returncode}."
-        if details:
-            message = f"{message} {details}"
-        raise ProductionSwitchError(message)
+    except FilesystemCleanupError as exc:
+        raise ProductionSwitchError(str(exc)) from exc
 
 
 def _remove_build_container_best_effort(config: ProjectConfig, docker_runner: DockerCommandRunner) -> None:

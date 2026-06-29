@@ -302,7 +302,7 @@ Automatic rollback применяется только для обычного n
 
 Promote выполняет build smoke-tests до production switch и затем обычный production switch.
 
-PowerShell helper `promote-existing-build.ps1` принимает `-UpdateLog` как optional override. Если `-UpdateLog` не указан, helper читает `paths.root` из project config и выбирает самый поздний по timestamp в имени `YYYYMMDD-HHMMSS-update.log` из `<paths.root>/logs`, чтобы извлечь `Target commit`, `Source fingerprint` и `Report hash`.
+PowerShell helper `promote-existing-build.ps1` принимает `-UpdateLog` как optional override. Если `-UpdateLog` не указан, helper вычисляет resolved project root: `paths.root` из project config или директорию `project.json`, если `paths.root` отсутствует. Затем helper выбирает самый поздний по timestamp в имени `YYYYMMDD-HHMMSS-update.log` из `<resolved-root>/logs`, чтобы извлечь `Target commit`, `Source fingerprint` и `Report hash`.
 
 ## 13. Exit Codes
 

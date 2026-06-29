@@ -323,7 +323,7 @@ powershell -ExecutionPolicy Bypass -File .\promote-existing-build.ps1 `
   -UpdaterVerbose
 ```
 
-Если `-UpdateLog` не указан, helper читает `paths.root` из project config и берет самый поздний по timestamp в имени `YYYYMMDD-HHMMSS-update.log` из `<paths.root>\logs`.
+Если `-UpdateLog` не указан, helper берет resolved project root: явный `paths.root` из project config или директорию `project.json`, если `paths.root` отсутствует. Затем helper выбирает самый поздний по timestamp в имени `YYYYMMDD-HHMMSS-update.log` из `<resolved-root>\logs`.
 
 Явный log можно указать как override:
 

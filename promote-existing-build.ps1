@@ -54,12 +54,21 @@ function Resolve-UpdateLogPath {
         return (Resolve-Path -LiteralPath $ExplicitLogPath).Path
     }
 
-    $configPayload = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if (-not $configPayload.paths.root) {
-        throw "project.json does not contain paths.root: $ConfigPath"
+    $resolvedConfigPath = (Resolve-Path -LiteralPath $ConfigPath).Path
+    $configPayload = Get-Content -LiteralPath $resolvedConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $projectRoot = $null
+    $pathsProperty = $configPayload.PSObject.Properties["paths"]
+    if ($pathsProperty -and $null -ne $pathsProperty.Value) {
+        $rootProperty = $pathsProperty.Value.PSObject.Properties["root"]
+        if ($rootProperty -and $null -ne $rootProperty.Value) {
+            $projectRoot = [string]$rootProperty.Value
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($projectRoot)) {
+        $projectRoot = Split-Path -Parent $resolvedConfigPath
     }
 
-    $logsRoot = Join-Path $configPayload.paths.root "logs"
+    $logsRoot = Join-Path $projectRoot "logs"
     if (-not (Test-Path -LiteralPath $logsRoot)) {
         throw "Logs directory not found: $logsRoot"
     }

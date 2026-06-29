@@ -365,8 +365,8 @@ Promote выполняет build smoke-tests, затем вызывает общ
 `promote-existing-build.ps1`:
 
 - принимает `-UpdateLog` как optional override;
-- если `-UpdateLog` не указан, читает `paths.root` из project config;
-- выбирает самый поздний по timestamp в имени `YYYYMMDD-HHMMSS-update.log` из `<paths.root>/logs`;
+- если `-UpdateLog` не указан, вычисляет resolved project root: `paths.root` из project config или директорию `project.json`, если `paths.root` отсутствует;
+- выбирает самый поздний по timestamp в имени `YYYYMMDD-HHMMSS-update.log` из `<resolved-root>/logs`;
 - извлекает из log `Target commit:`, `Source fingerprint:` и `Report hash:`.
 
 ## 14. Tests

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -8,7 +9,7 @@ import pytest
 from mcp_project_updater.config import load_project_config
 from mcp_project_updater.docker_ops import DockerCommandResult
 from mcp_project_updater.state import StateStore
-from mcp_project_updater.switcher import ProductionSmokeTestFailed, perform_switch
+from mcp_project_updater.switcher import ProductionSmokeTestFailed, ProductionSwitchError, _remove_if_exists, perform_switch
 from tests.config_helpers import strip_global_project_blocks, write_runtime_files
 
 
@@ -258,3 +259,58 @@ def test_perform_switch_continues_when_build_container_cannot_be_removed(tmp_pat
 
     assert state_store.read_current_commit() == "abc123"
     assert "Failed to remove build container" in caplog.text
+
+
+def test_remove_if_exists_uses_wsl_native_delete_for_wsl_unc_path() -> None:
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    _remove_if_exists(
+        Path(r"\\wsl.localhost\Ubuntu\home\norkins\mcp-indexes\esb\previous"),
+        allowed_root=Path(r"\\wsl.localhost\Ubuntu\home\norkins\mcp-indexes\esb"),
+        process_runner=runner,
+    )
+
+    assert calls == [
+        (
+            ["wsl.exe", "-d", "Ubuntu", "--", "rm", "-rf", "--", "/home/norkins/mcp-indexes/esb/previous"],
+            {"capture_output": True, "text": True, "check": False},
+        )
+    ]
+
+
+def test_remove_if_exists_refuses_to_remove_cleanup_root() -> None:
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    with pytest.raises(ProductionSwitchError) as exc:
+        _remove_if_exists(
+            Path(r"\\wsl.localhost\Ubuntu\home\norkins\mcp-indexes\esb"),
+            allowed_root=Path(r"\\wsl.localhost\Ubuntu\home\norkins\mcp-indexes\esb"),
+            process_runner=runner,
+        )
+
+    assert "Refusing to remove cleanup root itself" in str(exc.value)
+    assert calls == []
+
+
+def test_remove_if_exists_wraps_windows_delete_os_error(tmp_path: Path, monkeypatch) -> None:
+    previous = tmp_path / "previous"
+    previous.mkdir()
+
+    def _raise_os_error(path):
+        raise OSError("folder is not empty")
+
+    monkeypatch.setattr("mcp_project_updater.switcher.shutil.rmtree", _raise_os_error)
+
+    with pytest.raises(ProductionSwitchError) as exc:
+        _remove_if_exists(previous, allowed_root=tmp_path)
+
+    assert "Failed to remove switch artifact" in str(exc.value)
+    assert "folder is not empty" in str(exc.value)

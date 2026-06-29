@@ -316,11 +316,14 @@ Production smoke-test не должен запускаться до switch, по
 - проверяет `staging/build` и `index_storage_root/build`;
 - удаляет production container;
 - best-effort удаляет build container;
+- удаляет старые `previous` artifacts через guarded cleanup внутри `staging_root` / `index_storage_root`;
 - перемещает `current` в `previous`;
 - перемещает `build` в `current`;
 - стартует production container с disabled `INDEX_*` и `REINDEX_INTERVAL_SEC=0`;
 - выполняет production smoke-test;
 - записывает state только после успешного smoke.
+
+Cleanup старого `index_storage_root/previous` для WSL UNC paths (`\\wsl.localhost\<distro>\...` и `\\wsl$\<distro>\...`) должен выполняться через `wsl.exe -d <distro> -- rm -rf -- <linux-path>`, а не через Windows `shutil.rmtree()`. Recursive cleanup должен отказываться удалять target, если target равен allowed root или находится вне allowed root. Ошибки cleanup должны превращаться в `ProductionSwitchError`, чтобы CLI возвращал exit code `14` без raw traceback.
 
 При обычном production smoke failure:
 

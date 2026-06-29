@@ -141,6 +141,13 @@ def test_parse_args_storage_migration() -> None:
     assert options.force is False
 
 
+def test_parse_args_repair_metadata_index() -> None:
+    options = parse_args(["--config", "project.json", "--repair-metadata-index"])
+
+    assert options.repair_metadata_index is True
+    assert options.force is False
+
+
 def test_parse_args_storage_migration_rejects_force() -> None:
     try:
         parse_args(["--config", "project.json", "--storage-migration", "--force"])
@@ -166,6 +173,16 @@ def test_parse_args_storage_migration_rejects_promote_existing_build() -> None:
         assert exc.code == 2
     else:
         raise AssertionError("Expected argparse SystemExit")
+
+
+def test_parse_args_repair_metadata_index_rejects_conflicts() -> None:
+    for flag in ("--force", "--storage-migration", "--rollback", "--promote-existing-build", "--dry-run"):
+        try:
+            parse_args(["--config", "project.json", "--repair-metadata-index", flag])
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:
+            raise AssertionError(f"Expected argparse SystemExit for {flag}")
 
 
 def test_parse_args_promote_existing_build() -> None:
@@ -243,6 +260,81 @@ def test_main_returns_success_when_no_changes_and_not_forced(tmp_path: Path, mon
     result = main(["--config", str(config_path)])
 
     assert result == ExitCode.SUCCESS
+
+
+def test_main_repair_metadata_index_does_not_skip_unchanged_state_and_reuses_code(tmp_path: Path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    source_result = detect_sources(tmp_path / "repo", "src/cf", False, "src/cfe", False)
+    source_fingerprint = compute_source_fingerprint(source_result)
+    state_root = tmp_path / "state"
+    state_root.mkdir(parents=True, exist_ok=True)
+    (state_root / "last_indexed_commit").write_text("same-commit\n", encoding="utf-8")
+    (state_root / "last_source_fingerprint").write_text(f"{source_fingerprint}\n", encoding="utf-8")
+    current_report_path = tmp_path / "staging" / "current" / "metadata" / "Report.txt"
+    current_report_path.parent.mkdir(parents=True, exist_ok=True)
+    current_report_path.write_text("ok", encoding="utf-8")
+    current_index_storage = tmp_path / "index-storage" / "current"
+    current_index_storage.mkdir(parents=True, exist_ok=True)
+    (current_index_storage / "db.bin").write_text("seed", encoding="utf-8")
+
+    captured = {"repair_called": False}
+    _mock_phase2_dependencies(monkeypatch, commit="same-commit", create_report=True)
+    monkeypatch.setattr("mcp_project_updater.cli.ensure_docker_available", lambda: "26.1.0")
+
+    def _fake_start_build_container(mcp_config, build_paths, paths_config, runner, **kwargs):
+        captured.update(kwargs)
+        return type("BuildContainerResult", (), {"command": ["docker", "run"], "container_id": "cid"})()
+
+    def _fake_repair(url, timeout_seconds, retry_interval_seconds, require_code_index):
+        captured["repair_called"] = True
+        captured["repair_url"] = url
+        captured["repair_require_code_index"] = require_code_index
+        return type("RepairResult", (), {"metadata_count": 5, "code_count": 10})()
+
+    monkeypatch.setattr("mcp_project_updater.cli.start_build_container", _fake_start_build_container)
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.run_infrastructure_smoke_test",
+        lambda smoke_config, context, runner: type("SmokeResult", (), {"http_status_code": 404})(),
+    )
+    monkeypatch.setattr("mcp_project_updater.cli.run_metadata_index_repair", _fake_repair)
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.run_tool_smoke_test",
+        lambda config, tool_smoke_config, working_directory, url: type("ToolSmokeResult", (), {"stdout": '{"ok":true}'})(),
+    )
+    monkeypatch.setattr("mcp_project_updater.cli.write_container_logs", lambda container_name, output_path, runner: output_path)
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.perform_switch",
+        lambda config, state_store, target_commit, production_log_path, docker_runner, storage_migration=False: type(
+            "SwitchResult",
+            (),
+            {"target_commit": target_commit, "production_log_path": production_log_path},
+        )(),
+    )
+
+    result = main(["--config", str(config_path), "--repair-metadata-index"])
+
+    assert result == ExitCode.SUCCESS
+    assert captured["seed_index_storage_from"] == current_index_storage
+    assert captured["reset_database"] is False
+    assert captured["index_metadata"] is True
+    assert captured["index_code"] is False
+    assert captured["index_help"] is False
+    assert captured["repair_called"] is True
+    assert captured["repair_url"] == "http://localhost:18100/mcp"
+    assert captured["repair_require_code_index"] is True
+
+
+def test_main_repair_metadata_index_requires_current_storage(tmp_path: Path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    _mock_phase2_dependencies(monkeypatch, create_report=True)
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.start_build_container",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("build must not start")),
+    )
+
+    result = main(["--config", str(config_path), "--repair-metadata-index"])
+
+    assert result == ExitCode.INVALID_STATE
 
 
 def test_main_disables_build_tool_smoke_timeout_on_initial_bootstrap(tmp_path: Path, monkeypatch) -> None:

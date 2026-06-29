@@ -121,6 +121,8 @@ def test_build_tool_smoke_config_payload_uses_defaults(tmp_path: Path) -> None:
     assert payload["diagnostic"] is False
     assert payload["timeoutSeconds"] == 60
     assert payload["overallTimeoutSeconds"] == 300
+    assert payload["requireMetadataVectorIndex"] is True
+    assert payload["requireCodeVectorIndex"] is True
 
 
 def test_build_tool_smoke_config_payload_uses_attempt_timeout_when_overall_deadline_disabled(tmp_path: Path) -> None:

@@ -5,6 +5,7 @@ param(
 
     [switch]$Force,
     [switch]$StorageMigration,
+    [switch]$RepairMetadataIndex,
     [switch]$NoGitPull,
     [switch]$Rollback,
     [switch]$DryRun
@@ -21,6 +22,10 @@ if ($Force) {
 
 if ($StorageMigration) {
     $arguments += "--storage-migration"
+}
+
+if ($RepairMetadataIndex) {
+    $arguments += "--repair-metadata-index"
 }
 
 if ($NoGitPull) {

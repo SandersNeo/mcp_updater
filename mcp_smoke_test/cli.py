@@ -20,9 +20,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--metadata-tool", default="metadatasearch")
     parser.add_argument("--metadata-query-argument", default="query")
     parser.add_argument("--metadata-query", action="append", default=[])
+    parser.add_argument(
+        "--allow-metadata-fallback",
+        action="store_true",
+        help="Allow metadata search fallback layers instead of requiring vector+bm25.",
+    )
     parser.add_argument("--code-tool", default="codesearch")
     parser.add_argument("--code-query-argument", default="query")
     parser.add_argument("--code-query", action="append", default=[])
+    parser.add_argument(
+        "--allow-code-fallback",
+        action="store_true",
+        help="Allow code search fallback layers instead of requiring vector+bm25.",
+    )
     return parser
 
 
@@ -33,7 +43,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.diagnostic:
             config.diagnostic = True
         result = asyncio.run(run_smoke_test(config))
-        print(json.dumps({"tools": result.listed_tools, "metadataOk": result.metadata_ok, "codeOk": result.code_ok}, ensure_ascii=False))
+        print(
+            json.dumps(
+                {
+                    "tools": result.listed_tools,
+                    "statsOk": result.stats_ok,
+                    "metadataOk": result.metadata_ok,
+                    "codeOk": result.code_ok,
+                },
+                ensure_ascii=False,
+            )
+        )
         return 0
     except SmokeTestError as exc:
         print(str(exc))
@@ -62,4 +82,6 @@ def _resolve_config(args) -> SmokeToolConfig:
         code_tool_name=args.code_tool,
         code_query_argument=args.code_query_argument,
         code_queries=list(args.code_query),
+        require_metadata_vector_index=not bool(args.allow_metadata_fallback),
+        require_code_vector_index=not bool(args.allow_code_fallback),
     )

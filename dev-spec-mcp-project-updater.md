@@ -111,6 +111,17 @@ require_index_storage_not_empty: bool
 
 Diagnostic messages должны использовать `MCP index storage path`.
 
+Tool smoke config payload должен содержать:
+
+```json
+{
+  "requireMetadataVectorIndex": true,
+  "requireCodeVectorIndex": true
+}
+```
+
+Значения выводятся из `mcp.indexMetadata` и `mcp.indexCode`. Smoke client должен вызывать MCP tool `stats` и проверять `stats.collections.metadata > 0` для metadata index и `stats.collections.code > 0` для code index. Для `metadatasearch` и `codesearch` успешный ответ должен иметь `search_layer=vector+bm25`; fallback layers вроде `grep` не проходят строгий smoke.
+
 ## 4. CLI
 
 `CliOptions`:
@@ -124,6 +135,7 @@ class CliOptions:
     rollback: bool = False
     promote_existing_build: bool = False
     storage_migration: bool = False
+    repair_metadata_index: bool = False
     promote_commit: str | None = None
     promote_source_fingerprint: str | None = None
     promote_report_hash: str | None = None
@@ -137,9 +149,17 @@ class CliOptions:
 - `--rollback`
 - `--promote-existing-build`
 
+`--repair-metadata-index` запрещен вместе с:
+
+- `--force`
+- `--storage-migration`
+- `--rollback`
+- `--promote-existing-build`
+- `--dry-run`
+
 `--force` не является migration marker. Это только rebuild control текущего configured `mcp.indexStorageRoot`.
 
-PowerShell wrapper `update-mcp-project.ps1` должен прокидывать `-StorageMigration` в `--storage-migration`.
+PowerShell wrapper `update-mcp-project.ps1` должен прокидывать `-StorageMigration` в `--storage-migration` и `-RepairMetadataIndex` в `--repair-metadata-index`.
 
 ## 5. Container Commands
 
@@ -206,6 +226,7 @@ Skip/no-change возможен только если:
 
 - нет `--force`;
 - нет `--storage-migration`;
+- нет `--repair-metadata-index`;
 - current report существует;
 - current index storage существует;
 - fingerprint/commit/hash условия совпали.
@@ -214,9 +235,8 @@ Reuse current storage:
 
 ```python
 reuse_current_index_storage = (
-    not options.force
-    and not options.storage_migration
-    and current_index_storage_exists
+    options.repair_metadata_index
+    or (not options.force and not options.storage_migration and current_index_storage_exists)
 )
 ```
 
@@ -226,6 +246,7 @@ Metadata unchanged:
 metadata_unchanged = (
     not options.force
     and not options.storage_migration
+    and not options.repair_metadata_index
     and report_hash == state_snapshot.last_report_hash
     and current_report_exists
     and current_index_storage_exists
@@ -239,7 +260,9 @@ start_build_container(
     ...,
     reset_database=False if reuse_current_index_storage else None,
     seed_index_storage_from=current_index_storage_path if reuse_current_index_storage else None,
-    index_metadata=False if metadata_unchanged else None,
+    index_metadata=True if options.repair_metadata_index else (False if metadata_unchanged else None),
+    index_code=False if options.repair_metadata_index else None,
+    index_help=False if options.repair_metadata_index else None,
 )
 ```
 
@@ -257,7 +280,23 @@ Workflow logs должны использовать backend-neutral wording: `MC
 
 Старая ChromaDB database может быть только backup/manual recovery source.
 
-## 9. Smoke Order
+## 9. Metadata Repair Mode
+
+`--repair-metadata-index`:
+
+- отключает skip по совпавшему state;
+- требует существующий `index_storage_root/current` до запуска build container;
+- seed-ит `index_storage_root/build` из `index_storage_root/current`;
+- стартует build container с `RESET_DATABASE=false`, `INDEX_METADATA=true`, `INDEX_CODE=false`, `INDEX_HELP=false`;
+- после build infrastructure smoke вызывает MCP tool `reindex(force=true)` на build URL;
+- ожидает завершения repair через `stats`;
+- требует `stats.collections.metadata > 0`;
+- если `mcp.indexCode=true`, требует `stats.collections.code > 0`, чтобы подтвердить сохранение code index;
+- затем выполняет обычный build tool smoke и общий production switch.
+
+`reindex(force=true)` в этом режиме не должен вызываться на production. Безопасность `force=true` обеспечивается тем, что в build container отключены code/help phases.
+
+## 10. Smoke Order
 
 Общий порядок для update, storage migration и promote:
 
@@ -270,7 +309,7 @@ Workflow logs должны использовать backend-neutral wording: `MC
 
 Production smoke-test не должен запускаться до switch, потому production container еще старый или не запущен.
 
-## 10. Switcher
+## 11. Switcher
 
 `perform_switch(..., storage_migration: bool = False)`:
 
@@ -296,7 +335,7 @@ Production smoke-test не должен запускаться до switch, по
 - не вызывать automatic rollback;
 - выбросить `ProductionSmokeTestFailed(..., rollback_attempted=False)` с manual recovery guidance.
 
-## 11. Rollback
+## 12. Rollback
 
 Rollback использует `paths.index_storage_root`:
 
@@ -307,7 +346,7 @@ Rollback использует `paths.index_storage_root`:
 
 Automatic rollback не применяется в storage migration.
 
-## 12. Promote Existing Build
+## 13. Promote Existing Build
 
 `--promote-existing-build` требует:
 
@@ -323,7 +362,7 @@ Promote выполняет build smoke-tests, затем вызывает общ
 - выбирает самый поздний по timestamp в имени `YYYYMMDD-HHMMSS-update.log` из `<paths.root>/logs`;
 - извлекает из log `Target commit:`, `Source fingerprint:` и `Report hash:`.
 
-## 13. Tests
+## 14. Tests
 
 Обязательные тестовые области:
 
@@ -348,7 +387,7 @@ Promote выполняет build smoke-tests, затем вызывает общ
 - new smoke config name and legacy alias;
 - backend-neutral log/diagnostic text.
 
-## 14. Documentation
+## 15. Documentation
 
 Docs/examples must state:
 
@@ -363,7 +402,7 @@ Docs/examples must state:
 - storage migration production smoke failure uses manual recovery;
 - beta/arm64 images are not supported.
 
-## 15. Verification
+## 16. Verification
 
 Перед завершением:
 

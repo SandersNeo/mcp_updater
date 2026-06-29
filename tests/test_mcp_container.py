@@ -196,12 +196,16 @@ def test_start_build_container_can_disable_metadata_and_seed_from_current(tmp_pa
         reset_database=False,
         seed_index_storage_from=current_index_storage,
         index_metadata=False,
+        index_code=False,
+        index_help=False,
     )
 
     assert (config.paths.index_storage_root / "build" / "db.bin").read_text(encoding="utf-8") == "seed"
     assert calls[1][:4] == ["docker", "run", "-d", "--init"]
     assert any(part == "RESET_DATABASE=false" for part in calls[1])
     assert any(part == "INDEX_METADATA=false" for part in calls[1])
+    assert any(part == "INDEX_CODE=false" for part in calls[1])
+    assert any(part == "INDEX_HELP=false" for part in calls[1])
 
 
 def test_build_production_container_command_uses_restart_policy(tmp_path: Path) -> None:

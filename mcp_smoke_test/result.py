@@ -16,6 +16,8 @@ class SmokeToolConfig:
     code_tool_name: str
     code_query_argument: str
     code_queries: list[str]
+    require_metadata_vector_index: bool = True
+    require_code_vector_index: bool = True
 
 
 @dataclass(slots=True)
@@ -23,3 +25,4 @@ class SmokeTestRunResult:
     listed_tools: list[str]
     metadata_ok: bool
     code_ok: bool
+    stats_ok: bool = True

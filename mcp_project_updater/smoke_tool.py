@@ -61,6 +61,8 @@ def build_tool_smoke_config_payload(
         "timeoutSeconds": per_attempt_timeout,
         "overallTimeoutSeconds": overall_timeout_seconds,
         "indexCode": config.mcp.index_code,
+        "requireMetadataVectorIndex": config.mcp.index_metadata,
+        "requireCodeVectorIndex": config.mcp.index_code,
         "diagnostic": tool_smoke_config.diagnostic,
         "metadataToolName": tool_smoke_config.metadata_tool_name,
         "metadataQueryArgument": tool_smoke_config.metadata_query_argument,

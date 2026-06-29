@@ -13,6 +13,7 @@ from .fingerprints import compute_report_hash, compute_source_fingerprint
 from .git_ops import determine_target_commit, ensure_repo_available, validate_repo
 from .lock import LockManager
 from .mcp_container import start_build_container
+from .metadata_repair import run_metadata_index_repair
 from .notifications import NotificationPayload, cleanup_old_logs, send_notification
 from .parser_runner import run_parser
 from .report_validator import validate_report
@@ -42,6 +43,7 @@ class CliOptions:
     rollback: bool = False
     promote_existing_build: bool = False
     storage_migration: bool = False
+    repair_metadata_index: bool = False
     promote_commit: str | None = None
     promote_source_fingerprint: str | None = None
     promote_report_hash: str | None = None
@@ -57,6 +59,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--storage-migration",
         action="store_true",
         help="Run ChromaDB to zvec storage cutover without seeding build storage from current storage.",
+    )
+    parser.add_argument(
+        "--repair-metadata-index",
+        action="store_true",
+        help="Rebuild metadata vector index from current storage without reindexing code.",
     )
     parser.add_argument("--no-git-pull", action="store_true", help="Use current HEAD without git fetch/pull.")
     mode_group = parser.add_mutually_exclusive_group()
@@ -83,6 +90,16 @@ def parse_args(argv: Sequence[str] | None = None) -> CliOptions:
         parser.error("--storage-migration cannot be combined with --rollback.")
     if namespace.storage_migration and namespace.promote_existing_build:
         parser.error("--storage-migration cannot be combined with --promote-existing-build.")
+    if namespace.repair_metadata_index and namespace.force:
+        parser.error("--repair-metadata-index cannot be combined with --force.")
+    if namespace.repair_metadata_index and namespace.storage_migration:
+        parser.error("--repair-metadata-index cannot be combined with --storage-migration.")
+    if namespace.repair_metadata_index and namespace.rollback:
+        parser.error("--repair-metadata-index cannot be combined with --rollback.")
+    if namespace.repair_metadata_index and namespace.promote_existing_build:
+        parser.error("--repair-metadata-index cannot be combined with --promote-existing-build.")
+    if namespace.repair_metadata_index and namespace.dry_run:
+        parser.error("--repair-metadata-index cannot be combined with --dry-run.")
     return CliOptions(
         config_path=Path(namespace.config),
         force=namespace.force,
@@ -90,6 +107,7 @@ def parse_args(argv: Sequence[str] | None = None) -> CliOptions:
         rollback=namespace.rollback,
         promote_existing_build=namespace.promote_existing_build,
         storage_migration=namespace.storage_migration,
+        repair_metadata_index=namespace.repair_metadata_index,
         promote_commit=namespace.promote_commit,
         promote_source_fingerprint=namespace.promote_source_fingerprint,
         promote_report_hash=namespace.promote_report_hash,
@@ -127,7 +145,15 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
             else (
                 "promote"
                 if options.promote_existing_build
-                else ("storage-migration" if options.storage_migration else ("dry-run" if options.dry_run else "update"))
+                else (
+                    "storage-migration"
+                    if options.storage_migration
+                    else (
+                        "metadata-repair"
+                        if options.repair_metadata_index
+                        else ("dry-run" if options.dry_run else "update")
+                    )
+                )
             )
         ),
     )
@@ -209,6 +235,7 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
             and source_fingerprint == state_snapshot.last_source_fingerprint
             and not options.force
             and not options.storage_migration
+            and not options.repair_metadata_index
             and current_report_exists
             and current_index_storage_exists
         ):
@@ -218,11 +245,18 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
             source_fingerprint == state_snapshot.last_source_fingerprint
             and not options.force
             and not options.storage_migration
+            and not options.repair_metadata_index
             and current_report_exists
             and current_index_storage_exists
         ):
             logger.info("No effective source changes detected. Update is skipped.")
             return ExitCode.SUCCESS
+
+        if options.repair_metadata_index and not current_index_storage_exists:
+            raise UpdaterError(
+                f"Cannot repair metadata index: current index storage is missing: {current_index_storage_path}",
+                ExitCode.INVALID_STATE,
+            )
 
         if options.dry_run:
             _log_dry_run_summary(logger, config, options, state_snapshot, target_commit, source_result)
@@ -257,14 +291,14 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
         metadata_unchanged = (
             not options.force
             and not options.storage_migration
+            and not options.repair_metadata_index
             and report_hash == state_snapshot.last_report_hash
             and current_report_exists
             and current_index_storage_exists
         )
         reuse_current_index_storage = (
-            not options.force
-            and not options.storage_migration
-            and current_index_storage_exists
+            options.repair_metadata_index
+            or (not options.force and not options.storage_migration and current_index_storage_exists)
         )
         logger.info("Report hash: %s", report_hash)
         logger.info("Metadata unchanged: %s", metadata_unchanged)
@@ -286,7 +320,9 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
             runner=default_docker_runner,
             reset_database=False if reuse_current_index_storage else None,
             seed_index_storage_from=current_index_storage_path if reuse_current_index_storage else None,
-            index_metadata=False if metadata_unchanged else None,
+            index_metadata=True if options.repair_metadata_index else (False if metadata_unchanged else None),
+            index_code=False if options.repair_metadata_index else None,
+            index_help=False if options.repair_metadata_index else None,
         )
         logger.info("Started build container: %s", config.mcp.build.container_name)
 
@@ -302,6 +338,20 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
             runner=default_docker_runner,
         )
         logger.info("Infrastructure smoke-test passed with HTTP status %s", smoke_result.http_status_code)
+
+        if options.repair_metadata_index:
+            stage = "metadata_index_repair"
+            repair_result = run_metadata_index_repair(
+                config.mcp.build.url,
+                timeout_seconds=_metadata_repair_timeout_seconds(config),
+                retry_interval_seconds=config.smoke_test.tool_smoke_test.retry_interval_seconds,
+                require_code_index=config.mcp.index_code,
+            )
+            logger.info(
+                "Metadata index repair completed: metadata=%s code=%s",
+                repair_result.metadata_count,
+                repair_result.code_count,
+            )
 
         if config.smoke_test.tool_smoke_test.enabled:
             stage = "build_tool_smoke"
@@ -548,9 +598,10 @@ def _log_dry_run_summary(
 ) -> None:
     logger.info("Dry-run mode enabled.")
     logger.info(
-        "Options: force=%s storage_migration=%s no_git_pull=%s rollback=%s verbose=%s",
+        "Options: force=%s storage_migration=%s repair_metadata_index=%s no_git_pull=%s rollback=%s verbose=%s",
         options.force,
         options.storage_migration,
+        options.repair_metadata_index,
         options.no_git_pull,
         options.rollback,
         options.verbose,
@@ -612,6 +663,16 @@ def _build_tool_smoke_config_for_update(
     if last_indexed_commit_at_start is None and config.smoke_test.tool_smoke_test.timeout_seconds > 0:
         return replace(config.smoke_test.tool_smoke_test, timeout_seconds=0)
     return config.smoke_test.tool_smoke_test
+
+
+def _metadata_repair_timeout_seconds(config: ProjectConfig) -> int:
+    if config.smoke_test.tool_smoke_test.timeout_seconds > 0:
+        return config.smoke_test.tool_smoke_test.timeout_seconds
+    return max(
+        config.smoke_test.tool_smoke_test.attempt_timeout_seconds,
+        config.smoke_test.infrastructure.timeout_seconds,
+        1,
+    )
 
 
 def _handle_success_notification_and_cleanup(

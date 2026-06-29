@@ -8,7 +8,12 @@ from pathlib import Path
 import pytest
 
 
-def _run_wrapper(tmp_path: Path, *, verbose: bool) -> subprocess.CompletedProcess[str]:
+def _run_wrapper(
+    tmp_path: Path,
+    *,
+    verbose: bool,
+    repair_metadata_index: bool = False,
+) -> subprocess.CompletedProcess[str]:
     powershell = shutil.which("powershell.exe") or shutil.which("powershell")
     if powershell is None:
         pytest.skip("PowerShell is not available")
@@ -43,6 +48,8 @@ def _run_wrapper(tmp_path: Path, *, verbose: bool) -> subprocess.CompletedProces
     ]
     if verbose:
         command.append("-Verbose")
+    if repair_metadata_index:
+        command.append("-RepairMetadataIndex")
 
     result = subprocess.run(
         command,
@@ -70,3 +77,10 @@ def test_update_wrapper_omits_verbose_when_not_requested(tmp_path: Path) -> None
 
     assert result.returncode == 0
     assert "--verbose" not in result.args_file.read_text(encoding="utf-8")  # type: ignore[attr-defined]
+
+
+def test_update_wrapper_accepts_repair_metadata_index(tmp_path: Path) -> None:
+    result = _run_wrapper(tmp_path, verbose=False, repair_metadata_index=True)
+
+    assert result.returncode == 0
+    assert "--repair-metadata-index" in result.args_file.read_text(encoding="utf-8")  # type: ignore[attr-defined]

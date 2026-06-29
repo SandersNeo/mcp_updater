@@ -162,6 +162,7 @@ python .\update_mcp_project.py --config C:\mcp-updater-data\orders\project.json 
 - `--config` - путь к `project.json`
 - `--force` - rebuild текущего configured `mcp.indexStorageRoot` без seed/reuse из `current`
 - `--storage-migration` - явный ChromaDB -> zvec cutover без seed из старого/current storage
+- `--repair-metadata-index` - пересобрать только metadata vector index поверх существующего `current`, без пересборки code index
 - `--no-git-pull` - использовать текущий `HEAD` без `fetch/pull`
 - `--rollback` - manual rollback `current <-> previous`
 - `--promote-existing-build` - принять уже готовые `staging/build` и `index storage/build`
@@ -171,6 +172,7 @@ python .\update_mcp_project.py --config C:\mcp-updater-data\orders\project.json 
 - `--dry-run` - validation и расчет плана без parser/docker/switch
 
 `--storage-migration` нельзя комбинировать с `--force`, `--rollback` или `--promote-existing-build`.
+`--repair-metadata-index` нельзя комбинировать с `--force`, `--storage-migration`, `--rollback`, `--promote-existing-build` или `--dry-run`.
 
 PowerShell wrapper:
 
@@ -268,6 +270,34 @@ Production container не строит и не обновляет индекс. 
 `--force` отключает seed/reuse только для текущего configured storage root. Он не является marker-ом ChromaDB -> zvec migration.
 
 После switch production container запускается без indexing flags и с `REINDEX_INTERVAL_SEC=0`, поэтому periodic scan внутри production не должен запускаться updater-ом. Если в production logs снова появляются длительные `Background indexing started`, проверьте, что контейнер был пересоздан новой версией updater-а и в `docker inspect` env содержит `INDEX_METADATA=false`, `INDEX_CODE=false`, `INDEX_HELP=false`, `REINDEX_INTERVAL_SEC=0`.
+
+## Metadata Index Repair
+
+Если production MCP отвечает на `metadatasearch` через `grep` fallback или `stats.collections.metadata=0`, чините только metadata index:
+
+```powershell
+python .\update_mcp_project.py --config C:\mcp-updater-data\orders\project.json --repair-metadata-index --verbose
+```
+
+PowerShell wrapper:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\update-mcp-project.ps1 `
+  -Config C:\mcp-updater-data\orders\project.json `
+  -RepairMetadataIndex `
+  -Verbose
+```
+
+Repair workflow:
+
+- требует существующий `mcp.indexStorageRoot/current`;
+- копирует `current` в `build`, поэтому code/forms/sub-indexes переиспользуются;
+- стартует build container с `RESET_DATABASE=false`, `INDEX_METADATA=true`, `INDEX_CODE=false`, `INDEX_HELP=false`;
+- вызывает MCP tool `reindex(force=true)` на build container, где включена только metadata phase;
+- build tool smoke требует `stats.collections.metadata > 0`, при включенном `indexCode` также `stats.collections.code > 0`, и `search_layer=vector+bm25`;
+- production switch выполняется только после успешных build checks.
+
+Не используйте `--force` для этой ситуации: он предназначен для полной пересборки configured storage root и может заново строить code index.
 
 ## Promote Existing Build
 

@@ -45,7 +45,7 @@ class _FakeSession:
         return _FakeListToolsResult([_FakeTool(name) for name in self._tools])
 
     async def call_tool(self, name, arguments):
-        return self._responses[(name, next(iter(arguments.values())))]
+        return self._responses[(name, next(iter(arguments.values()), None))]
 
 
 class _BoomSession:
@@ -57,6 +57,44 @@ class _BoomSession:
 
     async def list_tools(self):
         raise RuntimeError("transport boom")
+
+
+def _search_result(search_layer: str = "vector+bm25") -> _FakeResult:
+    return _FakeResult(
+        [
+            _FakeText(
+                json.dumps(
+                    {
+                        "status": "success",
+                        "data": {
+                            "search_layer": search_layer,
+                            "items": [{"name": "ok"}],
+                        },
+                    }
+                )
+            )
+        ]
+    )
+
+
+def _stats_result(*, metadata: int = 1, code: int = 1) -> _FakeResult:
+    return _FakeResult(
+        [
+            _FakeText(
+                json.dumps(
+                    {
+                        "status": "success",
+                        "data": {
+                            "collections": {
+                                "metadata": metadata,
+                                "code": code,
+                            }
+                        },
+                    }
+                )
+            )
+        ]
+    )
 
 
 def test_load_smoke_config(tmp_path: Path) -> None:
@@ -104,10 +142,11 @@ def test_run_smoke_test_success() -> None:
         return await run_smoke_test(
             config,
             session_factory=lambda url: _FakeSession(
-                ["metadatasearch", "codesearch"],
+                ["metadatasearch", "codesearch", "stats"],
                 {
-                    ("metadatasearch", "Конфигурации"): _FakeResult([_FakeText("ok")]),
-                    ("codesearch", "Процедура"): _FakeResult([_FakeText("ok")]),
+                    ("stats", None): _stats_result(),
+                    ("metadatasearch", "Конфигурации"): _search_result(),
+                    ("codesearch", "Процедура"): _search_result(),
                 },
             ),
         )
@@ -116,6 +155,7 @@ def test_run_smoke_test_success() -> None:
 
     assert result.metadata_ok is True
     assert result.code_ok is True
+    assert result.stats_ok is True
 
 
 def test_run_smoke_test_fails_when_tool_missing() -> None:
@@ -167,10 +207,11 @@ def test_run_smoke_test_emits_diagnostics(capsys: pytest.CaptureFixture[str]) ->
         return await run_smoke_test(
             config,
             session_factory=lambda url: _FakeSession(
-                ["metadatasearch", "codesearch"],
+                ["metadatasearch", "codesearch", "stats"],
                 {
-                    ("metadatasearch", "metadata"): _FakeResult([_FakeText("ok")]),
-                    ("codesearch", "code"): _FakeResult([_FakeText("ok")]),
+                    ("stats", None): _stats_result(),
+                    ("metadatasearch", "metadata"): _search_result(),
+                    ("codesearch", "code"): _search_result(),
                 },
             ),
         )
@@ -182,6 +223,106 @@ def test_run_smoke_test_emits_diagnostics(capsys: pytest.CaptureFixture[str]) ->
     assert result.code_ok is True
     assert "[diagnostic] list_tools:start" in captured.err
     assert "[diagnostic] call_tool:ok name=metadatasearch query='metadata'" in captured.err
+
+
+def test_run_smoke_test_fails_on_metadata_fallback_layer() -> None:
+    config = SmokeToolConfig(
+        url="http://localhost:18100/mcp",
+        timeout_seconds=5,
+        overall_timeout_seconds=30,
+        index_code=False,
+        diagnostic=False,
+        metadata_tool_name="metadatasearch",
+        metadata_query_argument="query",
+        metadata_queries=["metadata"],
+        code_tool_name="codesearch",
+        code_query_argument="query",
+        code_queries=[],
+    )
+
+    async def _run():
+        return await run_smoke_test(
+            config,
+            session_factory=lambda url: _FakeSession(
+                ["metadatasearch", "stats"],
+                {
+                    ("stats", None): _stats_result(metadata=1, code=0),
+                    ("metadatasearch", "metadata"): _search_result("grep"),
+                },
+            ),
+        )
+
+    with pytest.raises(SmokeTestError) as exc:
+        asyncio.run(_run())
+
+    assert "fallback search_layer=grep" in str(exc.value)
+
+
+def test_run_smoke_test_fails_on_empty_metadata_collection() -> None:
+    config = SmokeToolConfig(
+        url="http://localhost:18100/mcp",
+        timeout_seconds=5,
+        overall_timeout_seconds=30,
+        index_code=False,
+        diagnostic=False,
+        metadata_tool_name="metadatasearch",
+        metadata_query_argument="query",
+        metadata_queries=["metadata"],
+        code_tool_name="codesearch",
+        code_query_argument="query",
+        code_queries=[],
+    )
+
+    async def _run():
+        return await run_smoke_test(
+            config,
+            session_factory=lambda url: _FakeSession(
+                ["metadatasearch", "stats"],
+                {
+                    ("stats", None): _stats_result(metadata=0, code=0),
+                    ("metadatasearch", "metadata"): _search_result(),
+                },
+            ),
+        )
+
+    with pytest.raises(SmokeTestError) as exc:
+        asyncio.run(_run())
+
+    assert "Metadata vector index is empty" in str(exc.value)
+
+
+def test_run_smoke_test_fails_on_code_fallback_layer() -> None:
+    config = SmokeToolConfig(
+        url="http://localhost:18100/mcp",
+        timeout_seconds=5,
+        overall_timeout_seconds=30,
+        index_code=True,
+        diagnostic=False,
+        metadata_tool_name="metadatasearch",
+        metadata_query_argument="query",
+        metadata_queries=["metadata"],
+        code_tool_name="codesearch",
+        code_query_argument="query",
+        code_queries=["code"],
+    )
+
+    async def _run():
+        return await run_smoke_test(
+            config,
+            session_factory=lambda url: _FakeSession(
+                ["metadatasearch", "codesearch", "stats"],
+                {
+                    ("stats", None): _stats_result(metadata=1, code=1),
+                    ("metadatasearch", "metadata"): _search_result(),
+                    ("codesearch", "code"): _search_result("grep"),
+                },
+            ),
+        )
+
+    with pytest.raises(SmokeTestError) as exc:
+        asyncio.run(_run())
+
+    assert "fallback search_layer=grep" in str(exc.value)
 
 
 def test_run_smoke_test_wraps_transport_errors() -> None:
@@ -233,8 +374,11 @@ def test_run_smoke_test_passes_request_timeout_to_session_factory() -> None:
     def factory(url, *, request_timeout_seconds=None, progress_callback=None):
         seen["timeout"] = request_timeout_seconds
         return _TimeoutAwareSession(
-            ["metadatasearch"],
-            {("metadatasearch", "metadata"): _FakeResult([_FakeText("ok")])},
+            ["metadatasearch", "stats"],
+            {
+                ("stats", None): _stats_result(metadata=1, code=0),
+                ("metadatasearch", "metadata"): _search_result(),
+            },
         )
 
     async def _run():

@@ -64,8 +64,10 @@ async def _run_smoke_test_internal(
 
         if config.metadata_tool_name not in tool_names:
             raise SmokeTestError(f"Required metadata tool is missing: {config.metadata_tool_name}")
+        stats_ok = await _validate_index_stats(session, config, tool_names, progress_callback)
 
         metadata_ok = False
+        metadata_layer_mismatch = None
         for query in config.metadata_queries:
             _emit_progress(progress_callback, f"call_tool:start name={config.metadata_tool_name} query={query!r}")
             result = await _call_session(
@@ -76,11 +78,23 @@ async def _run_smoke_test_internal(
                 stage=f"{config.metadata_tool_name}({query})",
             )
             if _result_has_content(result):
+                if config.require_metadata_vector_index and _result_search_layer(result) != "vector+bm25":
+                    metadata_layer_mismatch = _result_search_layer(result) or "<missing>"
+                    _emit_progress(
+                        progress_callback,
+                        f"call_tool:fallback name={config.metadata_tool_name} layer={metadata_layer_mismatch}",
+                    )
+                    continue
                 _emit_progress(progress_callback, f"call_tool:ok name={config.metadata_tool_name} query={query!r}")
                 metadata_ok = True
                 break
             _emit_progress(progress_callback, f"call_tool:empty name={config.metadata_tool_name} query={query!r}")
         if not metadata_ok:
+            if metadata_layer_mismatch is not None:
+                raise SmokeTestError(
+                    f"Metadata tool '{config.metadata_tool_name}' used fallback search_layer={metadata_layer_mismatch}; "
+                    "expected vector+bm25."
+                )
             raise SmokeTestError(f"Metadata tool '{config.metadata_tool_name}' did not return a non-empty result.")
 
         code_ok = True
@@ -88,6 +102,7 @@ async def _run_smoke_test_internal(
             if config.code_tool_name not in tool_names:
                 raise SmokeTestError(f"Required code tool is missing: {config.code_tool_name}")
             code_ok = False
+            code_layer_mismatch = None
             for query in config.code_queries:
                 _emit_progress(progress_callback, f"call_tool:start name={config.code_tool_name} query={query!r}")
                 result = await _call_session(
@@ -98,17 +113,30 @@ async def _run_smoke_test_internal(
                     stage=f"{config.code_tool_name}({query})",
                 )
                 if _result_has_content(result):
+                    if config.require_code_vector_index and _result_search_layer(result) != "vector+bm25":
+                        code_layer_mismatch = _result_search_layer(result) or "<missing>"
+                        _emit_progress(
+                            progress_callback,
+                            f"call_tool:fallback name={config.code_tool_name} layer={code_layer_mismatch}",
+                        )
+                        continue
                     _emit_progress(progress_callback, f"call_tool:ok name={config.code_tool_name} query={query!r}")
                     code_ok = True
                     break
                 _emit_progress(progress_callback, f"call_tool:empty name={config.code_tool_name} query={query!r}")
             if not code_ok:
+                if code_layer_mismatch is not None:
+                    raise SmokeTestError(
+                        f"Code tool '{config.code_tool_name}' used fallback search_layer={code_layer_mismatch}; "
+                        "expected vector+bm25."
+                    )
                 raise SmokeTestError(f"Code tool '{config.code_tool_name}' did not return a non-empty result.")
 
         return SmokeTestRunResult(
             listed_tools=tool_names,
             metadata_ok=metadata_ok,
             code_ok=code_ok,
+            stats_ok=stats_ok,
         )
 
 
@@ -126,7 +154,43 @@ def load_smoke_config(config_path: Path) -> SmokeToolConfig:
         code_tool_name=str(payload.get("codeToolName", "codesearch")),
         code_query_argument=str(payload.get("codeQueryArgument", "query")),
         code_queries=[str(item) for item in payload.get("codeQueries", [])],
+        require_metadata_vector_index=bool(payload.get("requireMetadataVectorIndex", True)),
+        require_code_vector_index=bool(payload.get("requireCodeVectorIndex", True)),
     )
+
+
+async def _validate_index_stats(
+    session,
+    config: SmokeToolConfig,
+    tool_names: list[str],
+    progress_callback: Callable[[str], None] | None,
+) -> bool:
+    if not (config.require_metadata_vector_index or (config.index_code and config.require_code_vector_index)):
+        return True
+    if "stats" not in tool_names:
+        raise SmokeTestError("Required stats tool is missing.")
+
+    _emit_progress(progress_callback, "call_tool:start name=stats")
+    result = await _call_session(
+        session.call_tool,
+        "stats",
+        {},
+        progress_callback=progress_callback,
+        stage="stats",
+    )
+    payload = _result_json(result)
+    if payload.get("status") != "success":
+        raise SmokeTestError("Stats tool did not return success.")
+    data = payload.get("data")
+    collections = data.get("collections") if isinstance(data, dict) else None
+    if not isinstance(collections, dict):
+        raise SmokeTestError("Stats tool response does not contain collections.")
+    if config.require_metadata_vector_index and int(collections.get("metadata") or 0) <= 0:
+        raise SmokeTestError("Metadata vector index is empty according to stats.collections.metadata.")
+    if config.index_code and config.require_code_vector_index and int(collections.get("code") or 0) <= 0:
+        raise SmokeTestError("Code vector index is empty according to stats.collections.code.")
+    _emit_progress(progress_callback, "call_tool:ok name=stats")
+    return True
 
 
 def _result_has_content(result: Any) -> bool:
@@ -144,6 +208,37 @@ def _result_has_content(result: Any) -> bool:
                 if isinstance(value, str) and value.strip():
                     return True
     return False
+
+
+def _result_json(result: Any) -> dict[str, Any]:
+    content = getattr(result, "content", None)
+    if not content:
+        return {}
+    text_parts = []
+    for item in content:
+        text = getattr(item, "text", None)
+        if isinstance(text, str):
+            text_parts.append(text)
+        elif isinstance(item, dict):
+            value = item.get("text")
+            if isinstance(value, str):
+                text_parts.append(value)
+    if not text_parts:
+        return {}
+    try:
+        payload = json.loads("".join(text_parts))
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _result_search_layer(result: Any) -> str | None:
+    payload = _result_json(result)
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return None
+    layer = data.get("search_layer")
+    return layer if isinstance(layer, str) else None
 
 
 def _sdk_session_factory(

@@ -150,7 +150,7 @@ def test_prepare_index_storage_build_uses_wsl_native_delete_for_wsl_unc_path(mon
     assert prepared == Path(r"\\wsl.localhost\Ubuntu\home\norkins\mcp-indexes\esb\build")
     assert calls == [
         (
-            ["wsl.exe", "-d", "Ubuntu", "--", "rm", "-rf", "--", "/home/norkins/mcp-indexes/esb/build"],
+            ["wsl.exe", "-d", "Ubuntu", "-u", "root", "--", "rm", "-rf", "--", "/home/norkins/mcp-indexes/esb/build"],
             {"capture_output": True, "text": True, "check": False},
         )
     ]

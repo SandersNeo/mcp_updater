@@ -211,7 +211,7 @@ def prepare_index_storage_build(index_storage_root: Path, *, seed_source: Path |
 - если `seed_source` задан и существует, скопировать его в `build`;
 - иначе создать пустой `build`.
 
-Cleanup `index_storage_root/build` для WSL UNC paths (`\\wsl.localhost\<distro>\...` и `\\wsl$\<distro>\...`) должен выполняться через `wsl.exe -d <distro> -- rm -rf -- <linux-path>`, а не через Windows `shutil.rmtree()`. Ошибки cleanup должны превращаться в `UpdaterError` с `ExitCode.BUILD_CONTAINER_FAILED`, чтобы CLI возвращал code `13` без raw traceback.
+Cleanup `index_storage_root/build` для WSL UNC paths (`\\wsl.localhost\<distro>\...` и `\\wsl$\<distro>\...`) должен выполняться через `wsl.exe -d <distro> -u root -- rm -rf -- <linux-path>`, а не через Windows `shutil.rmtree()`. Root user внутри WSL нужен для файлов, созданных Docker container-ом от root. Ошибки cleanup должны превращаться в `UpdaterError` с `ExitCode.BUILD_CONTAINER_FAILED`, чтобы CLI возвращал code `13` без raw traceback.
 
 Legacy `prepare_chroma_build` может остаться alias-ом на время совместимости.
 

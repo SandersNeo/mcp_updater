@@ -334,7 +334,7 @@ powershell -ExecutionPolicy Bypass -File .\promote-existing-build.ps1 `
 
 Promote проверяет build infrastructure/tool smoke до production switch.
 
-Updater удаляет старые `mcp.indexStorageRoot\build` и `mcp.indexStorageRoot\previous` через WSL-native cleanup, если storage задан как `\\wsl.localhost\...` или `\\wsl$\...`. Если старый updater упал с `WinError 145` на cleanup `build` или `previous`, после обновления повторите исходный update/repair command. Для metadata repair это снова выполнит metadata-only repair без пересборки code index.
+Updater удаляет старые `mcp.indexStorageRoot\build` и `mcp.indexStorageRoot\previous` через WSL-native cleanup от root внутри distro, если storage задан как `\\wsl.localhost\...` или `\\wsl$\...`. Это нужно для zvec/RocksDB файлов, созданных Docker container-ом от root. Если старый updater упал с `WinError 145` или `Permission denied` на cleanup `build` или `previous`, после обновления повторите исходный update/repair command. Для metadata repair это снова выполнит metadata-only repair без пересборки code index.
 
 ## Rollback
 

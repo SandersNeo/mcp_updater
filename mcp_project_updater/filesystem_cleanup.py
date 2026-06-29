@@ -75,6 +75,8 @@ def _remove_wsl_unc_path(
         "wsl.exe",
         "-d",
         wsl_path.distro,
+        "-u",
+        "root",
         "--",
         "rm",
         "-rf",

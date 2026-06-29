@@ -276,7 +276,7 @@ def test_remove_if_exists_uses_wsl_native_delete_for_wsl_unc_path() -> None:
 
     assert calls == [
         (
-            ["wsl.exe", "-d", "Ubuntu", "--", "rm", "-rf", "--", "/home/norkins/mcp-indexes/esb/previous"],
+            ["wsl.exe", "-d", "Ubuntu", "-u", "root", "--", "rm", "-rf", "--", "/home/norkins/mcp-indexes/esb/previous"],
             {"capture_output": True, "text": True, "check": False},
         )
     ]

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from mcp_project_updater.cli import main, parse_args
+from mcp_project_updater.config import load_project_config
 from mcp_project_updater.constants import ExitCode
 from mcp_project_updater.errors import UpdaterError
 from mcp_project_updater.fingerprints import compute_source_fingerprint
@@ -238,6 +239,32 @@ def test_main_returns_success_for_mocked_full_workflow(tmp_path: Path, monkeypat
     result = main(["--config", str(config_path)])
 
     assert result == ExitCode.SUCCESS
+
+
+def test_main_build_infrastructure_smoke_ignores_ready_patterns(tmp_path: Path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    expected_error_patterns = load_project_config(config_path).smoke_test.infrastructure.log_error_patterns
+    captured = {}
+    _mock_phase2_dependencies(
+        monkeypatch,
+        create_report=True,
+        complete_phase4=True,
+        complete_phase5=True,
+        complete_phase6=True,
+    )
+
+    def _fake_infrastructure_smoke(smoke_config, context, runner):
+        captured["ready_patterns"] = smoke_config.log_ready_patterns
+        captured["error_patterns"] = smoke_config.log_error_patterns
+        return type("SmokeResult", (), {"http_status_code": 404})()
+
+    monkeypatch.setattr("mcp_project_updater.cli.run_infrastructure_smoke_test", _fake_infrastructure_smoke)
+
+    result = main(["--config", str(config_path)])
+
+    assert result == ExitCode.SUCCESS
+    assert captured["ready_patterns"] == []
+    assert captured["error_patterns"] == expected_error_patterns
 
 
 def test_main_returns_success_when_no_changes_and_not_forced(tmp_path: Path, monkeypatch) -> None:

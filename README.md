@@ -151,6 +151,8 @@ Legacy `requireChromaNotEmpty` читается только как compatibilit
 
 При `logReadyPatterns: []` readiness определяется по container state, reachable host port, acceptable HTTP status, non-empty MCP index storage path и отсутствию error patterns в логах.
 
+Для build container updater всегда игнорирует `logReadyPatterns`, даже если они заданы в settings: infrastructure smoke проверяет только живость контейнера/порта/HTTP/storage и error patterns. Готовность индексов проверяет следующий build tool smoke-test с длинным timeout.
+
 ## Основной Запуск
 
 ```powershell

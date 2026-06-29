@@ -327,8 +327,9 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
         logger.info("Started build container: %s", config.mcp.build.container_name)
 
         stage = "build_infrastructure_smoke"
+        build_infrastructure_smoke_config = replace(config.smoke_test.infrastructure, log_ready_patterns=[])
         smoke_result = run_infrastructure_smoke_test(
-            config.smoke_test.infrastructure,
+            build_infrastructure_smoke_config,
             InfrastructureSmokeContext(
                 container_name=config.mcp.build.container_name,
                 host_port=config.mcp.build.host_port,

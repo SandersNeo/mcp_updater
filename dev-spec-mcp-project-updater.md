@@ -311,6 +311,8 @@ Workflow logs должны использовать backend-neutral wording: `MC
 
 Production smoke-test не должен запускаться до switch, потому production container еще старый или не запущен.
 
+Для обычного update и promote build infrastructure smoke должен выполняться с `log_ready_patterns=[]`, даже если в settings заданы `logReadyPatterns`. Это не отключает `log_error_patterns`: ошибки в Docker logs остаются blocking. Готовность tools/indexes доказывается build tool smoke-test до production switch.
+
 ## 11. Switcher
 
 `perform_switch(..., storage_migration: bool = False)`:

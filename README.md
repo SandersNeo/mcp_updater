@@ -102,6 +102,24 @@ pip install -e .
 
 Secret `OPENROUTER_API_KEY` в этом случае можно положить в `<paths.root>/secrets.local.json`. Если проект не задает эти поля, updater не требует `OPENROUTER_API_KEY` и не передает `OPENAI_API_BASE`, `OPENAI_MODEL`, `OPENAI_API_KEY` в контейнер.
 
+## Генерация MCP Configs Для Codex И Cursor
+
+Чтобы собрать client configs из всех project folders в data root:
+
+```powershell
+python .\generate_mcp_client_configs.py `
+  --data-root C:\mcp-updater-data `
+  --output-dir C:\mcp-updater-data\client-configs `
+  --client-host 1c-mcp
+```
+
+Скрипт ищет только прямые дочерние папки с `project.json`, резолвит production URL через тот же config loader, что и updater, и пишет:
+
+- `codex-mcp-servers.toml` - секции `[mcp_servers.1c-code-metadata-mcp-<project>]` для Codex `config.toml`
+- `cursor-mcp.json` - объект `mcpServers` для Cursor
+
+По умолчанию host в production URL заменяется на `1c-mcp`, сохраняя port и `/mcp`. Если нужен URL как в `project.json`/settings, используйте `--no-host-override`.
+
 ## Runtime Layout
 
 Для проекта `orders`:

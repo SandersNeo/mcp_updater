@@ -257,6 +257,96 @@ def test_run_tool_smoke_test_retries_timeout_until_success(tmp_path: Path, monke
     assert attempts["count"] == 3
 
 
+def test_run_tool_smoke_test_retries_empty_metadata_until_success(tmp_path: Path) -> None:
+    config = load_project_config(_write_config(tmp_path))
+    config.smoke_test.tool_smoke_test.timeout_seconds = 3
+    config.smoke_test.tool_smoke_test.retry_interval_seconds = 0
+    attempts = {"count": 0}
+
+    def runner(command, cwd):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            return ToolSmokeRunResult(
+                list(command),
+                13,
+                "Metadata vector index is empty according to stats.collections.metadata.",
+                "",
+            )
+        return ToolSmokeRunResult(list(command), 0, '{"ok":true}', "")
+
+    result = run_tool_smoke_test(
+        config,
+        config.smoke_test.tool_smoke_test,
+        working_directory=config.repo.path,
+        runner=runner,
+        url=config.mcp.build.url,
+    )
+
+    assert result.returncode == 0
+    assert attempts["count"] == 2
+
+
+def test_run_tool_smoke_test_retries_fallback_until_success(tmp_path: Path) -> None:
+    config = load_project_config(_write_config(tmp_path))
+    config.smoke_test.tool_smoke_test.timeout_seconds = 3
+    config.smoke_test.tool_smoke_test.retry_interval_seconds = 0
+    attempts = {"count": 0}
+
+    def runner(command, cwd):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            return ToolSmokeRunResult(
+                list(command),
+                13,
+                "Metadata tool 'metadatasearch' used fallback search_layer=grep; expected vector+bm25.",
+                "",
+            )
+        return ToolSmokeRunResult(list(command), 0, '{"ok":true}', "")
+
+    result = run_tool_smoke_test(
+        config,
+        config.smoke_test.tool_smoke_test,
+        working_directory=config.repo.path,
+        runner=runner,
+        url=config.mcp.build.url,
+    )
+
+    assert result.returncode == 0
+    assert attempts["count"] == 2
+
+
+def test_run_tool_smoke_test_times_out_retryable_empty_metadata(tmp_path: Path, monkeypatch) -> None:
+    config = load_project_config(_write_config(tmp_path))
+    config.smoke_test.tool_smoke_test.timeout_seconds = 3
+    config.smoke_test.tool_smoke_test.attempt_timeout_seconds = 1
+    config.smoke_test.tool_smoke_test.retry_interval_seconds = 1
+    clock = _FakeClock()
+
+    def runner(command, cwd):
+        clock.current += 1
+        return ToolSmokeRunResult(
+            list(command),
+            13,
+            "Metadata vector index is empty according to stats.collections.metadata.",
+            "",
+        )
+
+    monkeypatch.setattr("mcp_project_updater.smoke_tool.time.monotonic", clock.monotonic)
+    monkeypatch.setattr("mcp_project_updater.smoke_tool.time.sleep", clock.sleep)
+
+    with pytest.raises(ToolSmokeTestError) as exc:
+        run_tool_smoke_test(
+            config,
+            config.smoke_test.tool_smoke_test,
+            working_directory=config.repo.path,
+            runner=runner,
+            url=config.mcp.build.url,
+        )
+
+    assert "MCP tool smoke-test timed out after" in str(exc.value)
+    assert "Metadata vector index is empty according to stats.collections.metadata." in str(exc.value)
+
+
 def test_run_tool_smoke_test_without_overall_timeout_retries_until_success(tmp_path: Path, monkeypatch) -> None:
     config = load_project_config(_write_config(tmp_path))
     config.smoke_test.tool_smoke_test.timeout_seconds = 0

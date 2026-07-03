@@ -122,6 +122,14 @@ def validate_repo(repo_path: Path, runner: CommandRunner = default_command_runne
     )
 
 
+def clean_untracked_changes(
+    repo_path: Path,
+    runner: CommandRunner = default_command_runner,
+) -> list[str]:
+    result = _run_git(repo_path, ["git", "clean", "-fd"], runner, ExitCode.GIT_PULL_FAILED)
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
 def determine_target_commit(
     repo: RepoConfig,
     *,

@@ -118,7 +118,7 @@ def run_tool_smoke_test(
         if result.returncode == 0:
             return result
 
-        if not _is_retryable_timeout_result(result):
+        if not _is_retryable_smoke_result(result):
             details = _format_process_failure(result) or "Tool smoke-test failed."
             raise ToolSmokeTestError(details, ExitCode.BUILD_SMOKE_FAILED)
 
@@ -184,11 +184,18 @@ def _format_process_failure(result: ToolSmokeRunResult) -> str:
     return "\n".join(parts)
 
 
-def _is_retryable_timeout_result(result: ToolSmokeRunResult) -> bool:
+def _is_retryable_smoke_result(result: ToolSmokeRunResult) -> bool:
     if result.returncode != 13:
         return False
     text = "\n".join(part for part in (result.stdout, result.stderr) if part)
-    return "MCP tool smoke-test timed out." in text
+    retryable_messages = (
+        "MCP tool smoke-test timed out.",
+        "Metadata vector index is empty according to stats.collections.metadata.",
+        "Code vector index is empty according to stats.collections.code.",
+        "expected vector+bm25.",
+        "did not return a non-empty result.",
+    )
+    return any(message in text for message in retryable_messages)
 
 
 def _coerce_subprocess_output(value: str | bytes | None) -> str:

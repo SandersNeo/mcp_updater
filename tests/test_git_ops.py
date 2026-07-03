@@ -9,6 +9,7 @@ from mcp_project_updater.constants import ExitCode
 from mcp_project_updater.git_ops import (
     CommandResult,
     GitOperationError,
+    clean_untracked_changes,
     determine_target_commit,
     ensure_repo_available,
     validate_repo,
@@ -68,6 +69,19 @@ def test_validate_repo_collects_untracked_changes() -> None:
     result = validate_repo(Path("."), runner)
 
     assert result.untracked_changes == ["?? new.txt"]
+
+
+def test_clean_untracked_changes_runs_git_clean() -> None:
+    calls = []
+
+    def runner(command, cwd):
+        calls.append((command, cwd))
+        return CommandResult(0, "Removing new.txt\nRemoving generated/\n", "")
+
+    removed = clean_untracked_changes(cwd := Path("."), runner)
+
+    assert removed == ["Removing new.txt", "Removing generated/"]
+    assert calls == [(["git", "clean", "-fd"], cwd)]
 
 
 def test_ensure_repo_available_clones_missing_repo(tmp_path: Path) -> None:

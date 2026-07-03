@@ -104,6 +104,8 @@ Secret `OPENROUTER_API_KEY` в этом случае можно положить
 
 ## Генерация MCP Configs Для Codex И Cursor
 
+Подробная инструкция по подключению сгенерированных configs: [mcp-client-setup.md](mcp-client-setup.md).
+
 Чтобы собрать client configs из всех project folders в data root:
 
 ```powershell

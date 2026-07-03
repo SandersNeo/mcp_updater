@@ -226,6 +226,63 @@ def test_main_dry_run_returns_success(tmp_path: Path, monkeypatch) -> None:
     assert "Build URL: http://localhost:18100/mcp" in log_text
 
 
+def test_main_cleans_untracked_repo_before_pull(tmp_path: Path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    order = []
+
+    monkeypatch.setattr("mcp_project_updater.cli.ensure_repo_available", lambda repo, no_git_pull, env=None: None)
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.validate_repo",
+        lambda repo_path: RepoValidationResult(
+            inside_work_tree=True,
+            tracked_changes=[],
+            untracked_changes=["?? generated.xml"],
+        ),
+    )
+
+    def _clean(repo_path):
+        order.append("clean")
+        return ["Removing generated.xml"]
+
+    def _determine(repo, no_git_pull, env=None):
+        order.append("determine")
+        return "abc123"
+
+    monkeypatch.setattr("mcp_project_updater.cli.clean_untracked_changes", _clean)
+    monkeypatch.setattr("mcp_project_updater.cli.determine_target_commit", _determine)
+
+    result = main(["--config", str(config_path), "--dry-run"])
+
+    assert result == ExitCode.SUCCESS
+    assert order == ["clean", "determine"]
+
+
+def test_main_no_git_pull_leaves_untracked_repo_in_place(tmp_path: Path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+
+    monkeypatch.setattr("mcp_project_updater.cli.ensure_repo_available", lambda repo, no_git_pull, env=None: None)
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.validate_repo",
+        lambda repo_path: RepoValidationResult(
+            inside_work_tree=True,
+            tracked_changes=[],
+            untracked_changes=["?? generated.xml"],
+        ),
+    )
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.clean_untracked_changes",
+        lambda repo_path: (_ for _ in ()).throw(AssertionError("cleanup must not run")),
+    )
+    monkeypatch.setattr(
+        "mcp_project_updater.cli.determine_target_commit",
+        lambda repo, no_git_pull, env=None: "abc123",
+    )
+
+    result = main(["--config", str(config_path), "--dry-run", "--no-git-pull"])
+
+    assert result == ExitCode.SUCCESS
+
+
 def test_main_returns_success_for_mocked_full_workflow(tmp_path: Path, monkeypatch) -> None:
     config_path = _write_config(tmp_path)
     _mock_phase2_dependencies(

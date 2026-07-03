@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from mcp_project_updater.git_ops import (
     CommandResult,
     GitOperationError,
     clean_untracked_changes,
+    default_command_runner,
     determine_target_commit,
     ensure_repo_available,
     validate_repo,
@@ -82,6 +84,22 @@ def test_clean_untracked_changes_runs_git_clean() -> None:
 
     assert removed == ["Removing new.txt", "Removing generated/"]
     assert calls == [(["git", "clean", "-ffdx"], cwd)]
+
+
+def test_default_command_runner_decodes_git_output_as_utf8(monkeypatch) -> None:
+    captured = {}
+
+    def fake_run(command, **kwargs):
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(command, 0, stdout="РегламентированныйОтчет\n", stderr="")
+
+    monkeypatch.setattr("mcp_project_updater.git_ops.subprocess.run", fake_run)
+
+    result = default_command_runner(["git", "status"], Path("."))
+
+    assert result.stdout == "РегламентированныйОтчет\n"
+    assert captured["encoding"] == "utf-8"
+    assert captured["errors"] == "replace"
 
 
 def test_ensure_repo_available_clones_missing_repo(tmp_path: Path) -> None:
@@ -207,6 +225,73 @@ def test_determine_target_commit_with_git_pull_flow() -> None:
         ["git", "clean", "-ffdx"],
         ["git", "pull", "--ff-only", "origin", "master"],
         ["git", "rev-parse", "origin/master"],
+    ]
+
+
+def test_determine_target_commit_retries_pull_after_removing_blocking_untracked_file(tmp_path: Path) -> None:
+    repo = _repo(tmp_path / "repo")
+    blocker = repo.path / "generated" / "blocked.txt"
+    blocker.parent.mkdir(parents=True)
+    blocker.write_text("stale", encoding="utf-8")
+    calls = []
+    pull_attempts = {"count": 0}
+
+    def runner(command, cwd):
+        calls.append(command)
+        if command[:2] == ["git", "pull"]:
+            pull_attempts["count"] += 1
+            if pull_attempts["count"] == 1:
+                return CommandResult(
+                    1,
+                    "",
+                    "\n".join(
+                        [
+                            "error: The following untracked working tree files would be overwritten by merge:",
+                            "\tgenerated/blocked.txt",
+                            "Please move or remove them before you merge.",
+                            "Aborting",
+                        ]
+                    ),
+                )
+            return CommandResult(0, "", "")
+        if command[:2] == ["git", "rev-parse"]:
+            return CommandResult(0, "def456\n", "")
+        return CommandResult(0, "", "")
+
+    commit = determine_target_commit(repo, no_git_pull=False, runner=runner)
+
+    assert commit == "def456"
+    assert blocker.exists() is False
+    assert pull_attempts["count"] == 2
+    assert calls == [
+        ["git", "fetch", "origin", "master"],
+        ["git", "checkout", "master"],
+        ["git", "clean", "-ffdx"],
+        ["git", "pull", "--ff-only", "origin", "master"],
+        ["git", "pull", "--ff-only", "origin", "master"],
+        ["git", "rev-parse", "origin/master"],
+    ]
+
+
+def test_determine_target_commit_does_not_retry_unrelated_pull_error(tmp_path: Path) -> None:
+    repo = _repo(tmp_path / "repo")
+    calls = []
+
+    def runner(command, cwd):
+        calls.append(command)
+        if command[:2] == ["git", "pull"]:
+            return CommandResult(1, "", "fatal: Not possible to fast-forward, aborting.")
+        return CommandResult(0, "", "")
+
+    with pytest.raises(GitOperationError) as exc:
+        determine_target_commit(repo, no_git_pull=False, runner=runner)
+
+    assert "Not possible to fast-forward" in str(exc.value)
+    assert calls == [
+        ["git", "fetch", "origin", "master"],
+        ["git", "checkout", "master"],
+        ["git", "clean", "-ffdx"],
+        ["git", "pull", "--ff-only", "origin", "master"],
     ]
 
 

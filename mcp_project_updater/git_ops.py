@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import logging
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +15,9 @@ from .errors import UpdaterError
 
 class GitOperationError(UpdaterError):
     pass
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -31,6 +36,8 @@ def default_command_runner(command: Sequence[str], cwd: Path) -> CommandResult:
         cwd=str(cwd),
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     return CommandResult(
@@ -155,9 +162,79 @@ def determine_target_commit(
         repo.auth,
         env=env,
     )
-    _run_git(repo.path, pull_command, runner, ExitCode.GIT_PULL_FAILED)
+    try:
+        _run_git(repo.path, pull_command, runner, ExitCode.GIT_PULL_FAILED)
+    except GitOperationError as exc:
+        removed_paths = remove_pull_blocking_untracked_paths(repo.path, str(exc))
+        if not removed_paths:
+            raise
+        logger.warning(
+            "Removed Git pull blocking untracked paths before retry: %s",
+            [str(path) for path in removed_paths],
+        )
+        _run_git(repo.path, pull_command, runner, ExitCode.GIT_PULL_FAILED)
     result = _run_git(repo.path, ["git", "rev-parse", f"{repo.remote}/{repo.branch}"], runner, ExitCode.GIT_PULL_FAILED)
     return result.stdout.strip()
+
+
+def remove_pull_blocking_untracked_paths(repo_path: Path, git_error: str) -> list[Path]:
+    removed_paths: list[Path] = []
+    for relative_path in _parse_pull_blocking_untracked_paths(git_error):
+        candidate = _resolve_repo_child(repo_path, relative_path)
+        if not candidate.exists():
+            continue
+        if candidate.is_dir() and not candidate.is_symlink():
+            shutil.rmtree(candidate)
+        else:
+            candidate.unlink()
+        removed_paths.append(candidate)
+    return removed_paths
+
+
+def _parse_pull_blocking_untracked_paths(git_error: str) -> list[str]:
+    marker = "untracked working tree files would be overwritten by merge:"
+    paths: list[str] = []
+    collecting = False
+    for line in git_error.splitlines():
+        if marker in line:
+            collecting = True
+            continue
+        if not collecting:
+            continue
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("Please move or remove them before you merge.") or stripped == "Aborting":
+            break
+        if line.startswith((" ", "\t")):
+            paths.append(stripped)
+            continue
+        break
+    return paths
+
+
+def _resolve_repo_child(repo_path: Path, relative_path: str) -> Path:
+    candidate_relative = Path(relative_path)
+    if candidate_relative.is_absolute() or ".." in candidate_relative.parts:
+        raise GitOperationError(
+            f"Refusing to remove unsafe Git cleanup path: {relative_path}",
+            ExitCode.GIT_PULL_FAILED,
+        )
+    repo_root = repo_path.resolve()
+    candidate = (repo_path / candidate_relative).resolve()
+    try:
+        candidate.relative_to(repo_root)
+    except ValueError as exc:
+        raise GitOperationError(
+            f"Refusing to remove Git cleanup path outside repository: {relative_path}",
+            ExitCode.GIT_PULL_FAILED,
+        ) from exc
+    if candidate == repo_root:
+        raise GitOperationError(
+            f"Refusing to remove repository root during Git cleanup: {relative_path}",
+            ExitCode.GIT_PULL_FAILED,
+        )
+    return candidate
 
 
 def _render_pull_mode_flag(pull_mode: str) -> str:

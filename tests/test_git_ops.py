@@ -81,7 +81,7 @@ def test_clean_untracked_changes_runs_git_clean() -> None:
     removed = clean_untracked_changes(cwd := Path("."), runner)
 
     assert removed == ["Removing new.txt", "Removing generated/"]
-    assert calls == [(["git", "clean", "-fdx"], cwd)]
+    assert calls == [(["git", "clean", "-ffdx"], cwd)]
 
 
 def test_ensure_repo_available_clones_missing_repo(tmp_path: Path) -> None:
@@ -204,6 +204,7 @@ def test_determine_target_commit_with_git_pull_flow() -> None:
     assert calls == [
         ["git", "fetch", "origin", "master"],
         ["git", "checkout", "master"],
+        ["git", "clean", "-ffdx"],
         ["git", "pull", "--ff-only", "origin", "master"],
         ["git", "rev-parse", "origin/master"],
     ]
@@ -257,5 +258,6 @@ def test_gitlab_token_auth_is_applied_to_clone_and_fetch(tmp_path: Path) -> None
     assert "http.extraHeader=AUTHORIZATION: Basic " in calls[0][2]
     assert calls[1][:3] == ["git", "-c", calls[1][2]]
     assert calls[1][3:] == ["fetch", "origin", "master"]
-    assert calls[3][:3] == ["git", "-c", calls[3][2]]
-    assert calls[3][3:] == ["pull", "--ff-only", "origin", "master"]
+    assert calls[3] == ["git", "clean", "-ffdx"]
+    assert calls[4][:3] == ["git", "-c", calls[4][2]]
+    assert calls[4][3:] == ["pull", "--ff-only", "origin", "master"]

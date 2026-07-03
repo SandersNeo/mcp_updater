@@ -126,7 +126,7 @@ def clean_untracked_changes(
     repo_path: Path,
     runner: CommandRunner = default_command_runner,
 ) -> list[str]:
-    result = _run_git(repo_path, ["git", "clean", "-fdx"], runner, ExitCode.GIT_PULL_FAILED)
+    result = _run_git(repo_path, ["git", "clean", "-ffdx"], runner, ExitCode.GIT_PULL_FAILED)
     return [line for line in result.stdout.splitlines() if line.strip()]
 
 
@@ -148,6 +148,7 @@ def determine_target_commit(
     )
     _run_git(repo.path, fetch_command, runner, ExitCode.GIT_PULL_FAILED)
     _run_git(repo.path, ["git", "checkout", repo.branch], runner, ExitCode.GIT_PULL_FAILED)
+    clean_untracked_changes(repo.path, runner=runner)
 
     pull_command = _with_auth_options(
         ["git", "pull", _render_pull_mode_flag(repo.pull_mode), repo.remote, repo.branch],

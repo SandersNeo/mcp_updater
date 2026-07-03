@@ -195,19 +195,20 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
 
         stage = "git_validation"
         repo_validation = validate_repo(config.repo.path)
-        if repo_validation.untracked_changes:
-            if options.no_git_pull:
+        if options.no_git_pull:
+            if repo_validation.untracked_changes:
                 logger.warning(
                     "Untracked Git changes detected and left in place because --no-git-pull is set: %s",
                     repo_validation.untracked_changes,
                 )
-            else:
+        else:
+            if repo_validation.untracked_changes:
                 logger.warning(
                     "Untracked Git changes detected in managed repository; cleaning before pull: %s",
                     repo_validation.untracked_changes,
                 )
-                cleaned_paths = clean_untracked_changes(config.repo.path)
-                logger.info("Cleaned untracked Git paths before pull: %s", cleaned_paths or "<none>")
+            cleaned_paths = clean_untracked_changes(config.repo.path)
+            logger.info("Cleaned untracked/ignored Git paths before pull: %s", cleaned_paths or "<none>")
 
         stage = "git_target_commit"
         target_commit = determine_target_commit(

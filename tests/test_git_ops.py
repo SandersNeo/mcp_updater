@@ -81,7 +81,7 @@ def test_clean_untracked_changes_runs_git_clean() -> None:
     removed = clean_untracked_changes(cwd := Path("."), runner)
 
     assert removed == ["Removing new.txt", "Removing generated/"]
-    assert calls == [(["git", "clean", "-fd"], cwd)]
+    assert calls == [(["git", "clean", "-fdx"], cwd)]
 
 
 def test_ensure_repo_available_clones_missing_repo(tmp_path: Path) -> None:

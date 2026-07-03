@@ -344,6 +344,7 @@ def test_main_build_infrastructure_smoke_ignores_ready_patterns(tmp_path: Path, 
     def _fake_infrastructure_smoke(smoke_config, context, runner):
         captured["ready_patterns"] = smoke_config.log_ready_patterns
         captured["error_patterns"] = smoke_config.log_error_patterns
+        captured["timeout_seconds"] = smoke_config.timeout_seconds
         return type("SmokeResult", (), {"http_status_code": 404})()
 
     monkeypatch.setattr("mcp_project_updater.cli.run_infrastructure_smoke_test", _fake_infrastructure_smoke)
@@ -353,6 +354,7 @@ def test_main_build_infrastructure_smoke_ignores_ready_patterns(tmp_path: Path, 
     assert result == ExitCode.SUCCESS
     assert captured["ready_patterns"] == []
     assert captured["error_patterns"] == expected_error_patterns
+    assert captured["timeout_seconds"] == 600
 
 
 def test_main_returns_success_when_no_changes_and_not_forced(tmp_path: Path, monkeypatch) -> None:

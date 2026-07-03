@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Sequence
 
-from .config import ProjectConfig, load_project_config
+from .config import InfrastructureSmokeConfig, ProjectConfig, load_project_config
 from .constants import ExitCode, REPORT_FILE_NAME
 from .docker_ops import default_docker_runner, ensure_docker_available, write_container_logs
 from .fingerprints import compute_report_hash, compute_source_fingerprint
@@ -339,7 +339,7 @@ def run_update(config: ProjectConfig, options: CliOptions, *, log_path: Path) ->
         logger.info("Started build container: %s", config.mcp.build.container_name)
 
         stage = "build_infrastructure_smoke"
-        build_infrastructure_smoke_config = replace(config.smoke_test.infrastructure, log_ready_patterns=[])
+        build_infrastructure_smoke_config = _build_infrastructure_smoke_config(config)
         smoke_result = run_infrastructure_smoke_test(
             build_infrastructure_smoke_config,
             InfrastructureSmokeContext(
@@ -544,7 +544,7 @@ def run_promote_existing_build(
     docker_version = ensure_docker_available()
     logger.info("Docker available: %s", docker_version)
 
-    existing_build_smoke_config = replace(config.smoke_test.infrastructure, log_ready_patterns=[])
+    existing_build_smoke_config = _build_infrastructure_smoke_config(config)
     smoke_result = run_infrastructure_smoke_test(
         existing_build_smoke_config,
         InfrastructureSmokeContext(
@@ -676,6 +676,15 @@ def _build_tool_smoke_config_for_update(
     if last_indexed_commit_at_start is None and config.smoke_test.tool_smoke_test.timeout_seconds > 0:
         return replace(config.smoke_test.tool_smoke_test, timeout_seconds=0)
     return config.smoke_test.tool_smoke_test
+
+
+def _build_infrastructure_smoke_config(config: ProjectConfig) -> InfrastructureSmokeConfig:
+    extended_timeout = config.smoke_test.tool_smoke_test.attempt_timeout_seconds * 10
+    return replace(
+        config.smoke_test.infrastructure,
+        timeout_seconds=max(config.smoke_test.infrastructure.timeout_seconds, extended_timeout),
+        log_ready_patterns=[],
+    )
 
 
 def _metadata_repair_timeout_seconds(config: ProjectConfig) -> int:
